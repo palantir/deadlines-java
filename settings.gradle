@@ -10,4 +10,5 @@ buildscript {
 apply plugin: 'com.palantir.jdks.settings'
 rootProject.name = 'deadlines-java-root'
 
+include 'deadlines'
 include 'deadlines-api'

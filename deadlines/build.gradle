@@ -1,0 +1,19 @@
+apply plugin: 'com.palantir.external-publish-jar'
+apply plugin: 'com.palantir.metric-schema'
+apply plugin: 'com.palantir.revapi'
+
+dependencies {
+    api project(':deadlines-api')
+    implementation 'com.palantir.tracing:tracing'
+    implementation 'io.dropwizard.metrics:metrics-core'
+    implementation 'com.palantir.tritium:tritium-metrics'
+
+    // for VisibleForTesting annotation
+    compileOnly "com.google.guava:guava"
+
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testImplementation "org.assertj:assertj-core"
+    testImplementation "com.google.guava:guava"
+    testImplementation "org.awaitility:awaitility"
+}
+
