@@ -1,0 +1,2 @@
+org.assertj:assertj-core = 3.27.3
+org.junit.jupiter:* = 5.11.4

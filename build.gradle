@@ -1,0 +1,55 @@
+buildscript {
+    repositories {
+        mavenCentral() { metadataSources { mavenPom(); ignoreGradleMetadataRedirection() } }
+        gradlePluginPortal() { metadataSources { mavenPom(); ignoreGradleMetadataRedirection() } }
+    }
+
+    dependencies {
+        classpath 'com.palantir.gradle.failure-reports:gradle-failure-reports:1.13.0'
+        classpath 'com.palantir.jakartapackagealignment:jakarta-package-alignment:0.6.0'
+        classpath 'com.palantir.gradle.jdks:gradle-jdks:0.59.0'
+        classpath 'com.palantir.gradle.jdkslatest:gradle-jdks-latest:0.16.0'
+        classpath 'com.palantir.javaformat:gradle-palantir-java-format:2.50.0'
+        classpath 'com.palantir.suppressible-error-prone:gradle-suppressible-error-prone:2.0.0'
+        classpath 'com.palantir.gradle.revapi:gradle-revapi:1.8.0'
+        classpath 'com.palantir.gradle.consistentversions:gradle-consistent-versions:2.31.0'
+        classpath 'com.palantir.baseline:gradle-baseline-java:6.11.0'
+        classpath 'com.palantir.gradle.externalpublish:gradle-external-publish-plugin:1.19.0'
+        classpath 'com.palantir.gradle.gitversion:gradle-git-version:3.1.0'
+        classpath 'gradle.plugin.org.inferred:gradle-processors:3.7.0'
+    }
+}
+
+apply plugin: 'com.palantir.external-publish'
+apply plugin: 'com.palantir.git-version'
+apply plugin: 'com.palantir.jdks'
+apply plugin: 'com.palantir.consistent-versions'
+apply plugin: 'com.palantir.baseline'
+apply plugin: 'com.palantir.baseline-java-versions'
+apply plugin: 'com.palantir.jdks.latest'
+apply plugin: 'com.palantir.failure-reports'
+
+javaVersions {
+    libraryTarget = 17
+    runtime = 21
+}
+
+version gitVersion()
+
+allprojects {
+    repositories {
+        mavenCentral() { metadataSources { mavenPom(); ignoreGradleMetadataRedirection() } }
+    }
+
+    apply plugin: 'com.palantir.java-format'
+    apply plugin: 'com.palantir.baseline-null-away'
+    apply plugin: 'org.inferred.processors'
+    apply plugin: 'com.palantir.jakarta-package-alignment'
+
+    group 'com.palantir.deadlines'
+    version System.env.CIRCLE_TAG ?: rootProject.version
+}
+
+jdks {
+    daemonTarget = 17
+}
