@@ -31,7 +31,7 @@ public class Deadlines {
     public static void putDeadline(Duration deadline) {
         // store deadline state in a TraceLocal
         // what do we do if there is an existing state stored in the TraceLocal already??
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, System.nanoTime());
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline.toNanos(), System.nanoTime());
         deadlineState.set(providedDeadline);
     }
 
@@ -44,9 +44,9 @@ public class Deadlines {
             return Optional.empty();
         }
         // compute the remaining deadline relative to the current wall clock (may be negative)
-        Duration elapsed = Duration.ofNanos(System.nanoTime() - providedDeadline.timestamp());
-        Duration remaining = providedDeadline.value().minus(elapsed);
-        return Optional.of(remaining);
+        long elapsed = System.nanoTime() - providedDeadline.wallClockNanos();
+        long remaining = providedDeadline.valueNanos() - elapsed;
+        return Optional.of(Duration.ofNanos(remaining));
     }
 
     public static <T> void encodeToRequest(Duration deadline, T request, RequestEncodingAdapter<? super T> adapter) {

@@ -16,6 +16,10 @@
 
 package com.palantir.deadlines;
 
-import java.time.Duration;
-
-record ProvidedDeadline(Duration value, long timestamp) { }
+/**
+ * Internal state for a deadline provided by a caller (e.g. via an HTTP request or similar).
+ *
+ * @param valueNanos the deadline value, in nanoseconds
+ * @param wallClockNanos the current wall clock, in nanoseconds
+ */
+record ProvidedDeadline(long valueNanos, long wallClockNanos) {}
