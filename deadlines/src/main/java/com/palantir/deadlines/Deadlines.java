@@ -25,7 +25,9 @@ import java.util.Optional;
 /**
  * Utility methods for working with deadlines.
  */
-public class Deadlines {
+public final class Deadlines {
+
+    private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
 
@@ -65,7 +67,6 @@ public class Deadlines {
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
-     * @param <T> the type of the request object
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
@@ -94,7 +95,6 @@ public class Deadlines {
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      * @return the remaining deadline time parsed from the request headers, or {@link Optional#empty()} if
      * no such deadline exists.
-     * @param <T> the type of the request object
      */
     public static <T> Optional<Duration> parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
         Optional<String> maybeExpectWithin = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN);

@@ -32,7 +32,7 @@ class DeadlinesTest {
 
     @Test
     public void can_encode_to_request() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
             Duration deadline = Duration.ofSeconds(1);
             Deadlines.encodeToRequest(deadline, request, new DummyRequestEncoder());
@@ -47,7 +47,7 @@ class DeadlinesTest {
 
     @Test
     public void can_parse_from_request() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
             Duration providedDeadline = Duration.ofSeconds(1);
             request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
@@ -59,7 +59,7 @@ class DeadlinesTest {
 
     @Test
     public void parse_from_request_stores_internal_state() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
             Duration providedDeadline = Duration.ofSeconds(1);
             request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
@@ -72,7 +72,7 @@ class DeadlinesTest {
 
     @Test
     public void encode_to_request_uses_smaller_deadline_from_internal_state() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest inboundRequest = new DummyRequest();
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(1)));
@@ -94,7 +94,7 @@ class DeadlinesTest {
 
     @Test
     public void encode_to_request_uses_smaller_deadline_from_argument() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest inboundRequest = new DummyRequest();
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(2)));
