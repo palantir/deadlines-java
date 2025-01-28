@@ -5,7 +5,12 @@ dependencies {
     api project(':deadlines-api')
     implementation 'com.palantir.tracing:tracing'
 
+    // for VisibleForTesting annotation
+    compileOnly "com.google.guava:guava"
+
     testImplementation "org.junit.jupiter:junit-jupiter"
     testImplementation "org.assertj:assertj-core"
+    testImplementation "com.google.guava:guava"
+    testImplementation "org.awaitility:awaitility"
 }
 

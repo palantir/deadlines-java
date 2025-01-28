@@ -26,13 +26,14 @@ import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.CloseableTracer;
 import java.time.Duration;
 import java.util.Optional;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 class DeadlinesTest {
 
     @Test
     public void test_duration_to_header_value() {
-        Duration duration = Duration.ofNanos(1523000000L);
+        Duration duration = Duration.ofMillis(1523);
         String headerValue = Deadlines.durationToHeaderValue(duration);
         assertThat(headerValue).isEqualTo("1.523");
     }
@@ -41,7 +42,7 @@ class DeadlinesTest {
     public void test_header_value_to_duration() {
         String headerValue = "1.523";
         Duration duration = Deadlines.headerValueToDuration(headerValue);
-        assertThat(duration).isEqualTo(Duration.ofNanos(1523000000L));
+        assertThat(duration).isEqualTo(Duration.ofMillis(1523));
     }
 
     @Test
@@ -146,6 +147,24 @@ class DeadlinesTest {
         assertThat(deadline).hasValueSatisfying(d -> assertThat(d).isEqualTo(providedDeadline));
         // but state is not retained
         assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+    }
+
+    @Test
+    public void test_expiration_get_remaining_deadline() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+            Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+
+            // pollInSameThread is necessary for the polling function's call to getRemainingDeadline
+            // to read state from the TraceLocal
+            Awaitility.pollInSameThread();
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+                assertThat(remaining).isPresent().hasValue(Duration.ZERO);
+            });
+        }
     }
 
     private static final class DummyRequest {
