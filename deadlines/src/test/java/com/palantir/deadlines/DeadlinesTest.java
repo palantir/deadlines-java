@@ -29,46 +29,109 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class DeadlinesTest {
-    @Test
-    public void can_store_and_retrieve_deadline() {
-        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
-            Deadlines.putDeadline(Duration.ofSeconds(1));
-            Optional<Duration> remainingDeadline = Deadlines.getRemainingDeadline();
-            assertThat(remainingDeadline).hasValueSatisfying(value -> {
-                assertThat(value).isPositive();
-            });
-        }
-    }
 
     @Test
-    public void noop_when_outside_of_trace() {
-        Deadlines.putDeadline(Duration.ofSeconds(1));
-        Optional<Duration> remainingDeadline = Deadlines.getRemainingDeadline();
-        assertThat(remainingDeadline).isEmpty();
-    }
-
-    @Test
-    public void can_encode_to_http_request() {
+    public void can_encode_to_request() {
         try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
             Duration deadline = Duration.ofSeconds(1);
             Deadlines.encodeToRequest(deadline, request, new DummyRequestEncoder());
 
             assertThat(request.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
-                    .isPresent()
-                    .hasValue("1.00000");
+                    .hasValueSatisfying(s -> {
+                        String expected = Deadlines.durationToHeaderValue(deadline);
+                        assertThat(s).isEqualTo(expected);
+                    });
         }
     }
 
     @Test
-    public void can_decode_from_http_request() {
+    public void can_parse_from_request() {
         try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
-            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, "1.00000");
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
             Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
 
-            assertThat(deadline).isPresent().hasValue(Duration.ofSeconds(1));
+            assertThat(deadline).hasValueSatisfying(d -> assertThat(d).isEqualTo(providedDeadline));
         }
+    }
+
+    @Test
+    public void parse_from_request_stores_internal_state() {
+        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+            Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(deadline).isPresent();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(deadline.get()));
+        }
+    }
+
+    @Test
+    public void encode_to_request_uses_smaller_deadline_from_internal_state() {
+        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest inboundRequest = new DummyRequest();
+            inboundRequest.setHeader(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(1)));
+            Optional<Duration> stateDeadline = Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
+
+            assertThat(stateDeadline).isPresent();
+
+            DummyRequest outboundRequest = new DummyRequest();
+            Duration providedDeadline = Duration.ofSeconds(2);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, new DummyRequestEncoder());
+
+            assertThat(outboundRequest.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
+                    .hasValueSatisfying(h -> {
+                        Duration parsed = Deadlines.headerValueToDuration(h);
+                        assertThat(parsed).isLessThanOrEqualTo(stateDeadline.get());
+                    });
+        }
+    }
+
+    @Test
+    public void encode_to_request_uses_smaller_deadline_from_argument() {
+        try (CloseableTracer _tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest inboundRequest = new DummyRequest();
+            inboundRequest.setHeader(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(2)));
+            Optional<Duration> stateDeadline = Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
+
+            assertThat(stateDeadline).isPresent();
+
+            DummyRequest outboundRequest = new DummyRequest();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, new DummyRequestEncoder());
+
+            assertThat(outboundRequest.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
+                    .hasValueSatisfying(h -> {
+                        Duration parsed = Deadlines.headerValueToDuration(h);
+                        assertThat(parsed).isLessThanOrEqualTo(providedDeadline);
+                    });
+        }
+    }
+
+    @Test
+    public void parse_from_request_noop_when_no_header_present() {
+        DummyRequest request = new DummyRequest();
+        Optional<Duration> result = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    public void parse_from_request_noop_when_no_trace() {
+        DummyRequest request = new DummyRequest();
+        Duration providedDeadline = Duration.ofSeconds(1);
+        request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+        Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+
+        // the parse method still returns a duration equal to the provided deadline...
+        assertThat(deadline).hasValueSatisfying(d -> assertThat(d).isEqualTo(providedDeadline));
+        // but state is not retained
+        assertThat(Deadlines.getRemainingDeadline()).isEmpty();
     }
 
     private static final class DummyRequest {
