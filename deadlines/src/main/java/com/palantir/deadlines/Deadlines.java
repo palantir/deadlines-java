@@ -17,6 +17,7 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.TraceLocal;
 import java.time.Duration;
@@ -68,6 +69,7 @@ public final class Deadlines {
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
+     * @throws DeadlineExpiredException if the actual deadline selected (per the above rules) has already expired
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
@@ -76,6 +78,11 @@ public final class Deadlines {
         if (deadlineFromState.isPresent() && deadlineFromState.get().compareTo(proposedDeadline) < 0) {
             actualDeadline = deadlineFromState.get();
         }
+
+        if (actualDeadline.isZero() || actualDeadline.isNegative()) {
+            throw new DeadlineExpiredException();
+        }
+
         adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(actualDeadline));
     }
 
@@ -96,6 +103,7 @@ public final class Deadlines {
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      * @return the remaining deadline time parsed from the request headers, or {@link Optional#empty()} if
      * no such deadline exists.
+     * @throws DeadlineExpiredException if the deadline parsed from the request is <= 0
      */
     public static <T> Optional<Duration> parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
         Optional<String> maybeExpectWithin = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN);
@@ -103,6 +111,10 @@ public final class Deadlines {
             return Optional.empty();
         }
         Duration deadlineValue = headerValueToDuration(maybeExpectWithin.get());
+        if (deadlineValue.isNegative() || deadlineValue.isZero()) {
+            throw new DeadlineExpiredException();
+        }
+
         // store deadline state in a TraceLocal
         // note that this overwrites any existing values, but that's okay since we assume this method
         // will be called at the beginning of processing an RPC call, where there should be _no_ existing deadline yet.

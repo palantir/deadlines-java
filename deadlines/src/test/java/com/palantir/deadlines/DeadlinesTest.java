@@ -17,11 +17,13 @@
 package com.palantir.deadlines;
 
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
+import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.CloseableTracer;
 import java.time.Duration;
@@ -164,6 +166,51 @@ class DeadlinesTest {
                 Optional<Duration> remaining = Deadlines.getRemainingDeadline();
                 assertThat(remaining).isPresent().hasValue(Duration.ZERO);
             });
+        }
+    }
+
+    @Test
+    public void encode_to_request_throws_when_deadline_from_internal_state_expired() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+            Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+
+            Awaitility.pollInSameThread();
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThatThrownBy(() -> {
+                        DummyRequest outbound = new DummyRequest();
+                        Deadlines.encodeToRequest(Duration.ofSeconds(1), outbound, new DummyRequestEncoder());
+                    })
+                    .isInstanceOf(DeadlineExpiredException.class));
+        }
+    }
+
+    @Test
+    public void encode_to_request_throws_when_deadline_from_args_expired() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+            Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+
+            assertThatThrownBy(() -> {
+                        DummyRequest outbound = new DummyRequest();
+                        Deadlines.encodeToRequest(Duration.ZERO, outbound, new DummyRequestEncoder());
+                    })
+                    .isInstanceOf(DeadlineExpiredException.class);
+        }
+    }
+
+    @Test
+    public void parse_from_request_throws_when_deadline_expired() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Duration providedDeadline = Duration.ZERO;
+            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
+
+            assertThatThrownBy(() -> Deadlines.parseFromRequest(request, new DummyRequestDecoder()))
+                    .isInstanceOf(DeadlineExpiredException.class);
         }
     }
 
