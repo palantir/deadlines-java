@@ -94,21 +94,17 @@ public final class Deadlines {
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
      *
-     * If no such header exists, an {@link Optional#empty()} is returned.
-     *
      * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers.
      *
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @return the remaining deadline time parsed from the request headers, or {@link Optional#empty()} if
-     * no such deadline exists.
      * @throws DeadlineExpiredException if the deadline parsed from the request is <= 0
      */
-    public static <T> Optional<Duration> parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
+    public static <T> void parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
         Optional<String> maybeExpectWithin = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN);
         if (maybeExpectWithin.isEmpty()) {
-            return Optional.empty();
+            return;
         }
         Duration deadlineValue = headerValueToDuration(maybeExpectWithin.get());
         if (deadlineValue.isNegative() || deadlineValue.isZero()) {
@@ -120,15 +116,6 @@ public final class Deadlines {
         // will be called at the beginning of processing an RPC call, where there should be _no_ existing deadline yet.
         ProvidedDeadline providedDeadline = new ProvidedDeadline(deadlineValue.toNanos(), System.nanoTime());
         deadlineState.set(providedDeadline);
-
-        // don't call getRemainingDeadline(), which would return something slightly smaller than what was provided
-        // in the header as some amount of processing time has elapsed.
-        // this is potentially debatable, but I don't think callers should incur a penalty due to processing
-        // internal to this library only. Instead, just return exactly what was provided on the wire.
-        // TODO(blaub): this is a bit weird to return a value when deadlineState.set() may do nothing if we
-        // are called outside of a trace. Perhaps it would make more sense for this method to return void and have
-        // the caller explicitly query the state via getRemainingDeadline()
-        return Optional.of(deadlineValue);
     }
 
     // converts a Duration to a String representing seconds (or fractions thereof)

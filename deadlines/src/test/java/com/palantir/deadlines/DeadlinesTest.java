@@ -68,22 +68,10 @@ class DeadlinesTest {
             DummyRequest request = new DummyRequest();
             Duration providedDeadline = Duration.ofSeconds(1);
             request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
-            Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(request, new DummyRequestDecoder());
 
-            assertThat(deadline).hasValueSatisfying(d -> assertThat(d).isEqualTo(providedDeadline));
-        }
-    }
-
-    @Test
-    public void parse_from_request_stores_internal_state() {
-        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
-            DummyRequest request = new DummyRequest();
-            Duration providedDeadline = Duration.ofSeconds(1);
-            request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
-            Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(deadline).isPresent();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(deadline.get()));
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(providedDeadline));
         }
     }
 
@@ -93,8 +81,9 @@ class DeadlinesTest {
             DummyRequest inboundRequest = new DummyRequest();
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(1)));
-            Optional<Duration> stateDeadline = Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
 
+            Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
@@ -115,8 +104,9 @@ class DeadlinesTest {
             DummyRequest inboundRequest = new DummyRequest();
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(2)));
-            Optional<Duration> stateDeadline = Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(inboundRequest, new DummyRequestDecoder());
 
+            Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
@@ -133,9 +123,11 @@ class DeadlinesTest {
 
     @Test
     public void parse_from_request_noop_when_no_header_present() {
-        DummyRequest request = new DummyRequest();
-        Optional<Duration> result = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
-        assertThat(result).isEmpty();
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            DummyRequest request = new DummyRequest();
+            Deadlines.parseFromRequest(request, new DummyRequestDecoder());
+            assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+        }
     }
 
     @Test
@@ -143,11 +135,7 @@ class DeadlinesTest {
         DummyRequest request = new DummyRequest();
         Duration providedDeadline = Duration.ofSeconds(1);
         request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
-        Optional<Duration> deadline = Deadlines.parseFromRequest(request, new DummyRequestDecoder());
-
-        // the parse method still returns a duration equal to the provided deadline...
-        assertThat(deadline).hasValueSatisfying(d -> assertThat(d).isEqualTo(providedDeadline));
-        // but state is not retained
+        Deadlines.parseFromRequest(request, new DummyRequestDecoder());
         assertThat(Deadlines.getRemainingDeadline()).isEmpty();
     }
 
