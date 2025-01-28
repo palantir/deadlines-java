@@ -17,20 +17,36 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.TraceLocal;
+import com.palantir.tritium.metrics.registry.TaggedMetricRegistry;
 import java.time.Duration;
 import java.util.Optional;
 
 /**
- * Utility methods for working with deadlines.
+ * A class used to observe and enforce deadlines on RPC calls.
+ *
+ * A {@link DeadlineObserver} stores internal state about the current deadline value in a {@link TraceLocal},
+ * which allows all threads participating in a trace to observe the same deadline value.
+ *
+ * An observer can:
+ *   - parse a deadline value from a request header and set the internal deadline state via {@link #parseFromRequest}.
+ *   - encode the remaining time towards the deadline into a request header via {@link #encodeToRequest}.
+ *   - read the amount of time remaining towards the deadline via {@link #getRemainingDeadline}
+ *
+ * An observer also reports metrics when a deadline expiration is reached after a call to
+ * {@link #encodeToRequest} or {@link #parseFromRequest} for observability into how deadlines affect RPC call chains.
  */
-public final class Deadlines {
-
-    private Deadlines() {}
+public final class DeadlineObserver {
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+
+    @SuppressWarnings("unused")
+    private final TaggedMetricRegistry metrics;
+
+    public DeadlineObserver(TaggedMetricRegistry metrics) {
+        this.metrics = metrics;
+    }
 
     /**
      * Get the amount of time remaining for the current deadline.
@@ -44,7 +60,7 @@ public final class Deadlines {
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
-    public static Optional<Duration> getRemainingDeadline() {
+    public Optional<Duration> getRemainingDeadline() {
         ProvidedDeadline providedDeadline = deadlineState.get();
         if (providedDeadline == null) {
             return Optional.empty();
@@ -69,10 +85,8 @@ public final class Deadlines {
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
-     * @throws DeadlineExpiredException if the actual deadline selected (per the above rules) has already expired
      */
-    public static <T> void encodeToRequest(
-            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+    public <T> void encodeToRequest(Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
         Duration actualDeadline = proposedDeadline;
         Optional<Duration> deadlineFromState = getRemainingDeadline();
         if (deadlineFromState.isPresent() && deadlineFromState.get().compareTo(proposedDeadline) < 0) {
@@ -80,7 +94,8 @@ public final class Deadlines {
         }
 
         if (actualDeadline.isZero() || actualDeadline.isNegative()) {
-            throw new DeadlineExpiredException();
+            // TODO(blaub): report metrics here
+            // TODO(blaub): throw DeadlineExpiredException or similar
         }
 
         adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(actualDeadline));
@@ -99,16 +114,16 @@ public final class Deadlines {
      *
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @throws DeadlineExpiredException if the deadline parsed from the request is <= 0
      */
-    public static <T> void parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
+    public <T> void parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
         Optional<String> maybeExpectWithin = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN);
         if (maybeExpectWithin.isEmpty()) {
             return;
         }
         Duration deadlineValue = headerValueToDuration(maybeExpectWithin.get());
         if (deadlineValue.isNegative() || deadlineValue.isZero()) {
-            throw new DeadlineExpiredException();
+            // TODO(blaub): report metrics here
+            // TODO(blaub): throw DeadlineExpiredException or similar
         }
 
         // store deadline state in a TraceLocal
