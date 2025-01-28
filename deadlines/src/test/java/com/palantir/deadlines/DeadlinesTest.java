@@ -31,6 +31,20 @@ import org.junit.jupiter.api.Test;
 class DeadlinesTest {
 
     @Test
+    public void test_duration_to_header_value() {
+        Duration duration = Duration.ofNanos(1523000000L);
+        String headerValue = Deadlines.durationToHeaderValue(duration);
+        assertThat(headerValue).isEqualTo("1.523");
+    }
+
+    @Test
+    public void test_header_value_to_duration() {
+        String headerValue = "1.523";
+        Duration duration = Deadlines.headerValueToDuration(headerValue);
+        assertThat(duration).isEqualTo(Duration.ofNanos(1523000000L));
+    }
+
+    @Test
     public void can_encode_to_request() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();

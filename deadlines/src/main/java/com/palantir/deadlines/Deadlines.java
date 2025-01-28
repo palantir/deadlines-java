@@ -120,15 +120,19 @@ public final class Deadlines {
 
     // converts a Duration to a String representing seconds (or fractions thereof)
     // example:
-    //     durationToHeaderValue(Duration.ofNanos(1.5E9))
-    // returns "1.5"
+    //     durationToHeaderValue(Duration.ofNanos(1523000000L))
+    // returns "1.523"
     @VisibleForTesting
     static String durationToHeaderValue(Duration value) {
-        // TODO(blaub): fix this to avoid double math and string formatting
-        // see:
-        // https://github.palantir.build/foundry/witchcraft/blob/3275955c72688a32c5e51442962f6cf384b743a4/witchcraft-core/src/main/java/com/palantir/witchcraft/ServerTimingHandler.java#L47-L57
-        double seconds = (double) value.toNanos() / 1e9d;
-        return String.format("%.5f", seconds);
+        // adapted from:
+        // https://github.palantir.build/foundry/witchcraft/blob/develop/witchcraft-core/src/main/java/com/palantir/witchcraft/ServerTimingHandler.java#L47-L57
+        // to avoid operations on double and String.format
+        long durationNanos = value.toNanos();
+        return (durationNanos / 1000000000)
+                + "."
+                + ((int) (durationNanos % 1000000000) / 100000000)
+                + ((int) (durationNanos % 100000000) / 10000000)
+                + ((int) (durationNanos % 10000000) / 1000000);
     }
 
     // converts a String representing seconds (or fractions thereof) to a Duration
