@@ -1,7 +1,9 @@
+io.dropwizard.metrics:metrics-core = 4.2.30
+com.google.guava:guava = 33.4.0-jre
 com.palantir.tracing:* = 6.20.0
+com.palantir.tritium:* = 0.96.0
 
 # test dependencies
 org.assertj:assertj-core = 3.27.3
 org.junit.jupiter:* = 5.11.4
-com.google.guava:guava = 33.4.0-jre
 org.awaitility:awaitility = 4.2.2
