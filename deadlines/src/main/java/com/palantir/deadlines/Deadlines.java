@@ -80,7 +80,10 @@ public final class Deadlines {
         }
 
         if (actualDeadline.isZero() || actualDeadline.isNegative()) {
-            throw new DeadlineExpiredException();
+            // expired
+            // TODO(blaub): report metrics
+            // TODO(blaub): throw exception instead of return
+            return;
         }
 
         adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(actualDeadline));
@@ -97,24 +100,44 @@ public final class Deadlines {
      * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers.
      *
+     * @param internalDeadline if present, represents an alternative deadline that should be used if it is
+     * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      * @throws DeadlineExpiredException if the deadline parsed from the request is <= 0
      */
-    public static <T> void parseFromRequest(T request, RequestDecodingAdapter<? super T> adapter) {
-        Optional<String> maybeExpectWithin = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN);
-        if (maybeExpectWithin.isEmpty()) {
+    public static <T> void parseFromRequest(
+            Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
+        Optional<Duration> headerDeadline = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN)
+                .map(Deadlines::headerValueToDuration);
+
+        if (headerDeadline.isEmpty() && internalDeadline.isEmpty()) {
+            // nothing to do
+            return;
+        } else if (headerDeadline.isPresent() && internalDeadline.isEmpty()) {
+            storeDeadline(headerDeadline.get(), false);
+        } else if (headerDeadline.isEmpty()) {
+            storeDeadline(internalDeadline.get(), true);
+        } else {
+            // both present, so use the one that's lower
+            Duration headerDeadlineValue = headerDeadline.get();
+            Duration internalDeadlineValue = internalDeadline.get();
+            if (headerDeadlineValue.compareTo(internalDeadlineValue) <= 0) {
+                storeDeadline(headerDeadlineValue, false);
+            } else {
+                storeDeadline(internalDeadlineValue, true);
+            }
+        }
+    }
+
+    private static void storeDeadline(Duration deadline, boolean internal) {
+        if (deadline.isNegative() || deadline.isZero()) {
+            // expired
+            // TODO(blaub): report metrics
+            // TODO(blaub): throw exception instead of return
             return;
         }
-        Duration deadlineValue = headerValueToDuration(maybeExpectWithin.get());
-        if (deadlineValue.isNegative() || deadlineValue.isZero()) {
-            throw new DeadlineExpiredException();
-        }
-
-        // store deadline state in a TraceLocal
-        // note that this overwrites any existing values, but that's okay since we assume this method
-        // will be called at the beginning of processing an RPC call, where there should be _no_ existing deadline yet.
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadlineValue.toNanos(), System.nanoTime());
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline.toNanos(), System.nanoTime(), internal);
         deadlineState.set(providedDeadline);
     }
 

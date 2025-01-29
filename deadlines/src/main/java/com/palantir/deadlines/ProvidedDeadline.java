@@ -21,5 +21,7 @@ package com.palantir.deadlines;
  *
  * @param valueNanos the deadline value, in nanoseconds
  * @param wallClockNanos the current wall clock, in nanoseconds
+ * @param internal true if the deadline originates from an internal constraint, as opposed
+ * to a deadline provided externally (such as one parsed from a request header)
  */
-record ProvidedDeadline(long valueNanos, long wallClockNanos) {}
+record ProvidedDeadline(long valueNanos, long wallClockNanos, boolean internal) {}
