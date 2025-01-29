@@ -17,7 +17,6 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.TraceLocal;
 import java.time.Duration;
@@ -66,10 +65,10 @@ public final class Deadlines {
      *
      * This function has no side-effects on the internal deadline state stored in a TraceLocal.
      *
-     * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum
+     * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum of
+     * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
-     * @throws DeadlineExpiredException if the actual deadline selected (per the above rules) has already expired
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
@@ -104,7 +103,6 @@ public final class Deadlines {
      * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @throws DeadlineExpiredException if the deadline parsed from the request is <= 0
      */
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
