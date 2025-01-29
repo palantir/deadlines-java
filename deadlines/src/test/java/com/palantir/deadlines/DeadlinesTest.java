@@ -23,6 +23,7 @@ import com.google.common.collect.Multimap;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
+import com.palantir.deadlines.api.RemainingDeadline;
 import com.palantir.tracing.CloseableTracer;
 import java.time.Duration;
 import java.util.Optional;
@@ -68,8 +69,8 @@ class DeadlinesTest {
             request.setHeader(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline));
             Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
 
-            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(providedDeadline));
+            Optional<RemainingDeadline> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d.value()).isLessThanOrEqualTo(providedDeadline));
         }
     }
 
@@ -81,7 +82,7 @@ class DeadlinesTest {
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(1)));
             Deadlines.parseFromRequest(Optional.empty(), inboundRequest, new DummyRequestDecoder());
 
-            Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
+            Optional<RemainingDeadline> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
@@ -91,7 +92,8 @@ class DeadlinesTest {
             assertThat(outboundRequest.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
                     .hasValueSatisfying(h -> {
                         Duration parsed = Deadlines.headerValueToDuration(h);
-                        assertThat(parsed).isLessThanOrEqualTo(stateDeadline.get());
+                        assertThat(parsed)
+                                .isLessThanOrEqualTo(stateDeadline.get().value());
                     });
         }
     }
@@ -104,7 +106,7 @@ class DeadlinesTest {
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(Duration.ofSeconds(2)));
             Deadlines.parseFromRequest(Optional.empty(), inboundRequest, new DummyRequestDecoder());
 
-            Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
+            Optional<RemainingDeadline> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
@@ -149,8 +151,9 @@ class DeadlinesTest {
             // to read state from the TraceLocal
             Awaitility.pollInSameThread();
             Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-                assertThat(remaining).isPresent().hasValue(Duration.ZERO);
+                Optional<RemainingDeadline> remaining = Deadlines.getRemainingDeadline();
+                assertThat(remaining)
+                        .hasValueSatisfying(d -> assertThat(d.value()).isEqualTo(Duration.ZERO));
             });
         }
     }

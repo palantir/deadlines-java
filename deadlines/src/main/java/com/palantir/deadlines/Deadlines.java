@@ -18,6 +18,7 @@ package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
+import com.palantir.deadlines.api.RemainingDeadline;
 import com.palantir.tracing.TraceLocal;
 import java.time.Duration;
 import java.util.Optional;
@@ -43,7 +44,7 @@ public final class Deadlines {
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
-    public static Optional<Duration> getRemainingDeadline() {
+    public static Optional<RemainingDeadline> getRemainingDeadline() {
         ProvidedDeadline providedDeadline = deadlineState.get();
         if (providedDeadline == null) {
             return Optional.empty();
@@ -51,7 +52,10 @@ public final class Deadlines {
         // compute the remaining deadline relative to the current wall clock (may be negative)
         long elapsed = System.nanoTime() - providedDeadline.wallClockNanos();
         long remaining = providedDeadline.valueNanos() - elapsed;
-        return remaining <= 0 ? Optional.of(Duration.ZERO) : Optional.of(Duration.ofNanos(remaining));
+        if (remaining <= 0) {
+            return Optional.of(new RemainingDeadline(Duration.ZERO, providedDeadline.internal()));
+        }
+        return Optional.of(new RemainingDeadline(Duration.ofNanos(remaining), providedDeadline.internal()));
     }
 
     /**
@@ -73,9 +77,9 @@ public final class Deadlines {
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
         Duration actualDeadline = proposedDeadline;
-        Optional<Duration> deadlineFromState = getRemainingDeadline();
-        if (deadlineFromState.isPresent() && deadlineFromState.get().compareTo(proposedDeadline) < 0) {
-            actualDeadline = deadlineFromState.get();
+        Optional<RemainingDeadline> deadlineFromState = getRemainingDeadline();
+        if (deadlineFromState.isPresent() && deadlineFromState.get().value().compareTo(proposedDeadline) < 0) {
+            actualDeadline = deadlineFromState.get().value();
         }
 
         if (actualDeadline.isZero() || actualDeadline.isNegative()) {
