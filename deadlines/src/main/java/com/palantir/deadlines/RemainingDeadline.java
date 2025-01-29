@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-package com.palantir.deadlines.api;
+package com.palantir.deadlines;
 
 import java.time.Duration;
 
-public record RemainingDeadline(Duration value, boolean internal) {}
+record RemainingDeadline(Duration value, boolean internal) {}

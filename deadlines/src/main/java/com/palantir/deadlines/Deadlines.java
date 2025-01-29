@@ -19,7 +19,6 @@ package com.palantir.deadlines;
 import com.google.common.annotations.VisibleForTesting;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
-import com.palantir.deadlines.api.RemainingDeadline;
 import com.palantir.tracing.TraceLocal;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
@@ -47,7 +46,15 @@ public final class Deadlines {
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
-    public static Optional<RemainingDeadline> getRemainingDeadline() {
+    public static Optional<Duration> getRemainingDeadline() {
+        Optional<RemainingDeadline> remainingDeadline = getRemainingDeadlineInternal();
+        if (remainingDeadline.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(remainingDeadline.get().value());
+    }
+
+    private static Optional<RemainingDeadline> getRemainingDeadlineInternal() {
         ProvidedDeadline providedDeadline = deadlineState.get();
         if (providedDeadline == null) {
             return Optional.empty();
@@ -79,7 +86,7 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
-        Optional<RemainingDeadline> deadlineFromState = getRemainingDeadline();
+        Optional<RemainingDeadline> deadlineFromState = getRemainingDeadlineInternal();
         if (deadlineFromState.isEmpty()) {
             // use proposedDeadline
             checkExpiration(proposedDeadline, false);
