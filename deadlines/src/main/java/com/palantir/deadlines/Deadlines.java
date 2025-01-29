@@ -17,9 +17,11 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.deadlines.api.RemainingDeadline;
 import com.palantir.tracing.TraceLocal;
+import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.Optional;
 
@@ -31,6 +33,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+    private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
 
     /**
      * Get the amount of time remaining for the current deadline.
@@ -76,20 +79,23 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
-        Duration actualDeadline = proposedDeadline;
         Optional<RemainingDeadline> deadlineFromState = getRemainingDeadline();
-        if (deadlineFromState.isPresent() && deadlineFromState.get().value().compareTo(proposedDeadline) < 0) {
-            actualDeadline = deadlineFromState.get().value();
+        if (deadlineFromState.isEmpty()) {
+            // use proposedDeadline
+            checkExpiration(proposedDeadline, false);
+            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadline));
+        } else {
+            // use the minimum of proposedDeadline and the one read from state
+            RemainingDeadline stateDeadline = deadlineFromState.get();
+            if (proposedDeadline.compareTo(stateDeadline.value()) <= 0) {
+                checkExpiration(proposedDeadline, false);
+                adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadline));
+            } else {
+                checkExpiration(stateDeadline.value(), stateDeadline.internal());
+                adapter.setHeader(
+                        request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(stateDeadline.value()));
+            }
         }
-
-        if (actualDeadline.isZero() || actualDeadline.isNegative()) {
-            // expired
-            // TODO(blaub): report metrics
-            // TODO(blaub): throw exception instead of return
-            return;
-        }
-
-        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(actualDeadline));
     }
 
     /**
@@ -113,14 +119,13 @@ public final class Deadlines {
         Optional<Duration> headerDeadline = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN)
                 .map(Deadlines::headerValueToDuration);
 
-        if (headerDeadline.isEmpty() && internalDeadline.isEmpty()) {
-            // nothing to do
-            return;
-        } else if (headerDeadline.isPresent() && internalDeadline.isEmpty()) {
+        if (headerDeadline.isPresent() && internalDeadline.isEmpty()) {
+            // use the deadline parsed from a header, which is considered external
             storeDeadline(headerDeadline.get(), false);
-        } else if (headerDeadline.isEmpty()) {
+        } else if (headerDeadline.isEmpty() && internalDeadline.isPresent()) {
+            // use the deadline provided to this method, which is considered internal
             storeDeadline(internalDeadline.get(), true);
-        } else {
+        } else if (headerDeadline.isPresent()) {
             // both present, so use the one that's lower
             Duration headerDeadlineValue = headerDeadline.get();
             Duration internalDeadlineValue = internalDeadline.get();
@@ -130,17 +135,23 @@ public final class Deadlines {
                 storeDeadline(internalDeadlineValue, true);
             }
         }
+
+        // no-op if neither header is present nor optional internalDeadline is present
     }
 
     private static void storeDeadline(Duration deadline, boolean internal) {
-        if (deadline.isNegative() || deadline.isZero()) {
-            // expired
-            // TODO(blaub): report metrics
-            // TODO(blaub): throw exception instead of return
-            return;
-        }
+        checkExpiration(deadline, internal);
         ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline.toNanos(), System.nanoTime(), internal);
         deadlineState.set(providedDeadline);
+    }
+
+    private static void checkExpiration(Duration deadline, boolean internal) {
+        if (deadline.isNegative() || deadline.isZero()) {
+            // expired
+            Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
+            metrics.expired(cause).mark();
+            // TODO(blaub): throw exception instead of return
+        }
     }
 
     // converts a Duration to a String representing seconds (or fractions thereof)
