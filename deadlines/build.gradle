@@ -13,7 +13,6 @@ dependencies {
 
     testImplementation "org.junit.jupiter:junit-jupiter"
     testImplementation "org.assertj:assertj-core"
-    testImplementation "com.google.guava:guava"
     testImplementation "org.awaitility:awaitility"
 }
 
