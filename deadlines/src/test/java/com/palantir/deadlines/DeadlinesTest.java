@@ -53,7 +53,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
             Duration deadline = Duration.ofSeconds(1);
-            Deadlines.encodeToRequest(deadline, request, new DummyRequestEncoder());
+            Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE);
 
             assertThat(request.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
                     .hasValueSatisfying(s -> {
@@ -70,7 +70,7 @@ class DeadlinesTest {
             Duration providedDeadline = Duration.ofSeconds(1);
             request.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
-            Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(providedDeadline));
@@ -84,14 +84,14 @@ class DeadlinesTest {
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
                     Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
-            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
 
             Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
             Duration providedDeadline = Duration.ofSeconds(2);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, new DummyRequestEncoder());
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
 
             assertThat(outboundRequest.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
                     .hasValueSatisfying(h -> {
@@ -109,14 +109,14 @@ class DeadlinesTest {
             inboundRequest.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
                     Deadlines.durationToHeaderValue(Duration.ofSeconds(2).toNanos()));
-            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
 
             Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
             assertThat(stateDeadline).isPresent();
 
             DummyRequest outboundRequest = new DummyRequest();
             Duration providedDeadline = Duration.ofSeconds(1);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, new DummyRequestEncoder());
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
 
             assertThat(outboundRequest.getFirstHeader(DeadlinesHttpHeaders.EXPECT_WITHIN))
                     .hasValueSatisfying(h -> {
@@ -130,7 +130,7 @@ class DeadlinesTest {
     public void parse_from_request_noop_when_no_header_present() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             DummyRequest request = new DummyRequest();
-            Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
             assertThat(Deadlines.getRemainingDeadline()).isEmpty();
         }
     }
@@ -141,7 +141,7 @@ class DeadlinesTest {
         Duration providedDeadline = Duration.ofSeconds(1);
         request.setHeader(
                 DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
-        Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
+        Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
         assertThat(Deadlines.getRemainingDeadline()).isEmpty();
     }
 
@@ -152,7 +152,7 @@ class DeadlinesTest {
             Duration providedDeadline = Duration.ofMillis(1);
             request.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
-            Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
 
             // pollInSameThread is necessary for the polling function's call to getRemainingDeadline
             // to read state from the TraceLocal
@@ -171,7 +171,7 @@ class DeadlinesTest {
             Duration providedDeadline = Duration.ofMillis(1);
             request.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
-            Deadlines.parseFromRequest(Optional.empty(), request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
 
             // wait until we know the deadline has expired
             Awaitility.pollInSameThread();
@@ -187,7 +187,7 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             DummyRequest outbound = new DummyRequest();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, new DummyRequestEncoder());
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
 
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
             assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
@@ -201,7 +201,7 @@ class DeadlinesTest {
             Duration providedDeadline = Duration.ofMillis(100);
             request.setHeader(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
-            Deadlines.parseFromRequest(Optional.of(Duration.ofMillis(1)), request, new DummyRequestDecoder());
+            Deadlines.parseFromRequest(Optional.of(Duration.ofMillis(1)), request, DummyRequestDecoder.INSTANCE);
 
             // wait until we know the deadline has expired
             Awaitility.pollInSameThread();
@@ -217,7 +217,7 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             DummyRequest outbound = new DummyRequest();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, new DummyRequestEncoder());
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
@@ -236,14 +236,18 @@ class DeadlinesTest {
         }
     }
 
-    private static final class DummyRequestEncoder implements RequestEncodingAdapter<DummyRequest> {
+    private enum DummyRequestEncoder implements RequestEncodingAdapter<DummyRequest> {
+        INSTANCE;
+
         @Override
         public void setHeader(DummyRequest dummyRequest, String headerName, String headerValue) {
             dummyRequest.setHeader(headerName, headerValue);
         }
     }
 
-    private static final class DummyRequestDecoder implements RequestDecodingAdapter<DummyRequest> {
+    private enum DummyRequestDecoder implements RequestDecodingAdapter<DummyRequest> {
+        INSTANCE;
+
         @Override
         public Optional<String> getFirstHeader(DummyRequest dummyRequest, String headerName) {
             return dummyRequest.getFirstHeader(headerName);
