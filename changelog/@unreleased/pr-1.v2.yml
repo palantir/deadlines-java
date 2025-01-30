@@ -1,0 +1,5 @@
+type: feature
+feature:
+  description: initial functions for working with deadlines
+  links:
+  - https://github.com/palantir/deadlines-java/pull/1
