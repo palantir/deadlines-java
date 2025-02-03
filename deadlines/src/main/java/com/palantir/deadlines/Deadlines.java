@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
+import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
@@ -55,6 +56,8 @@ public final class Deadlines {
      *
      * If no deadline state has been set for the current trace, return an empty Optional.
      *
+     * This method never throws.
+     *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
@@ -87,6 +90,9 @@ public final class Deadlines {
      * already-set internal state, or a smaller one if the caller chooses that.
      *
      * This function has no side-effects on the internal deadline state stored in a TraceLocal.
+     *
+     * If at the time this method is called the selected deadline to encode has already expired, a
+     * {@link DeadlineExpiredException} will be thrown.
      *
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum of
      * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
@@ -125,8 +131,15 @@ public final class Deadlines {
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
      *
+     * The optional `internalDeadline` parameter specifices an alternative deadline to be used if it is lower
+     * than the one parsed from the request header. Callers can use this to bound the selected deadline based
+     * on specific internal logic that might take precedence over one provided in a request.
+     *
      * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers.
+     *
+     * If at the time this method is called the selected deadline to store has already expired, a
+     * {@link DeadlineExpiredException} will be thrown.
      *
      * @param internalDeadline if present, represents an alternative deadline that should be used if it is
      * lower than the one parsed from a request header
@@ -169,7 +182,7 @@ public final class Deadlines {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
             metrics.expired(cause).mark();
-            // TODO(blaub): throw exception instead of return
+            throw new DeadlineExpiredException(internal);
         }
     }
 
