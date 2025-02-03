@@ -236,11 +236,7 @@ class DeadlinesTest {
             Map<String, String> outbound = new HashMap<>();
             assertThatThrownBy(() ->
                             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
-                    .isInstanceOf(DeadlineExpiredException.class)
-                    .satisfies(t -> {
-                        DeadlineExpiredException exc = (DeadlineExpiredException) t;
-                        assertThat(exc.isInternal()).isFalse();
-                    });
+                    .isInstanceOf(DeadlineExpiredException.External.class);
 
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
             assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
@@ -272,11 +268,7 @@ class DeadlinesTest {
             Map<String, String> outbound = new HashMap<>();
             assertThatThrownBy(() ->
                             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
-                    .isInstanceOf(DeadlineExpiredException.class)
-                    .satisfies(t -> {
-                        DeadlineExpiredException exc = (DeadlineExpiredException) t;
-                        assertThat(exc.isInternal()).isTrue();
-                    });
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);

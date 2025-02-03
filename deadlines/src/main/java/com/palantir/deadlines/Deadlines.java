@@ -182,7 +182,10 @@ public final class Deadlines {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
             metrics.expired(cause).mark();
-            throw new DeadlineExpiredException(internal);
+            if (internal) {
+                throw DeadlineExpiredException.internal();
+            }
+            throw DeadlineExpiredException.external();
         }
     }
 

@@ -18,41 +18,60 @@ package com.palantir.deadlines.api;
 
 import com.palantir.logsafe.Arg;
 import com.palantir.logsafe.Safe;
-import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.SafeLoggable;
 import java.util.List;
 
 /**
  * Indicates that a deadline has expired.
  */
-public final class DeadlineExpiredException extends RuntimeException implements SafeLoggable {
-    private static final String MESSAGE = "A deadline for completing work has expired.";
-    private final List<Arg<?>> args;
-    private final boolean internal;
-
-    /**
-     * Create a new DeadlineExpiredException.
-     *
-     * @param internal true if this is expiration was for an internally-sourced deadline (such as one assigned
-     * internally by a server), or false if it was for a externally-sourced deadline (such as one provided by a
-     * client in a request header)
-     */
-    public DeadlineExpiredException(boolean internal) {
-        this.args = List.of(SafeArg.of("internal", internal));
-        this.internal = internal;
+public abstract class DeadlineExpiredException extends RuntimeException {
+    private DeadlineExpiredException(String message) {
+        super(message);
     }
 
-    @Override
-    public @Safe String getLogMessage() {
-        return MESSAGE;
+    public static External external() {
+        return new External();
     }
 
-    @Override
-    public List<Arg<?>> getArgs() {
-        return args;
+    public static Internal internal() {
+        return new Internal();
     }
 
-    public boolean isInternal() {
-        return internal;
+    public static final class External extends DeadlineExpiredException implements SafeLoggable {
+        private static final String MESSAGE = "An externally provided deadline for completing work has expired.";
+        private static final List<Arg<?>> ARGS = List.of();
+
+        private External() {
+            super(MESSAGE);
+        }
+
+        @Override
+        public @Safe String getLogMessage() {
+            return MESSAGE;
+        }
+
+        @Override
+        public List<Arg<?>> getArgs() {
+            return ARGS;
+        }
+    }
+
+    public static final class Internal extends DeadlineExpiredException implements SafeLoggable {
+        private static final String MESSAGE = "An internal deadline for completing work has expired.";
+        private static final List<Arg<?>> ARGS = List.of();
+
+        private Internal() {
+            super(MESSAGE);
+        }
+
+        @Override
+        public @Safe String getLogMessage() {
+            return MESSAGE;
+        }
+
+        @Override
+        public List<Arg<?>> getArgs() {
+            return ARGS;
+        }
     }
 }
