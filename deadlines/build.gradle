@@ -7,6 +7,8 @@ dependencies {
     implementation 'com.palantir.tracing:tracing'
     implementation 'io.dropwizard.metrics:metrics-core'
     implementation 'com.palantir.tritium:tritium-metrics'
+    implementation 'com.palantir.safe-logging:logger'
+    implementation 'com.palantir.safe-logging:safe-logging'
 
     // for VisibleForTesting annotation
     compileOnly "com.google.guava:guava"

@@ -19,8 +19,12 @@ package com.palantir.deadlines;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.primitives.Doubles;
+import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
+import com.palantir.logsafe.SafeArg;
+import com.palantir.logsafe.logger.SafeLogger;
+import com.palantir.logsafe.logger.SafeLoggerFactory;
 import com.palantir.tracing.TraceLocal;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
@@ -31,6 +35,9 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  * Utility methods for working with deadlines.
  */
 public final class Deadlines {
+
+    private static final SafeLogger log = SafeLoggerFactory.get(Deadlines.class);
+    private static final RateLimiter logLimiter = RateLimiter.create(1.0);
 
     private Deadlines() {}
 
@@ -190,6 +197,13 @@ public final class Deadlines {
 
         Double seconds = Doubles.tryParse(value);
         if (seconds == null) {
+            if (log.isWarnEnabled()) {
+                if (logLimiter.tryAcquire()) {
+                    log.warn("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
+                } else if (log.isDebugEnabled()) {
+                    log.debug("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
+                }
+            }
             return null;
         }
 
