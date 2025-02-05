@@ -1,0 +1,5 @@
+type: improvement
+improvement:
+  description: avoid encoding negative deadline values to request headers
+  links:
+  - https://github.com/palantir/deadlines-java/pull/21
