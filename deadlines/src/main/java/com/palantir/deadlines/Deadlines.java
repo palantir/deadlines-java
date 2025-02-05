@@ -193,27 +193,24 @@ public final class Deadlines {
     @Nullable
     @VisibleForTesting
     static Long tryParseSecondsToNanoseconds(String value) {
+        NumberFormatException exception = null;
         String normalized = Strings.nullToEmpty(value).trim();
-        if (normalized.isEmpty()) {
-            return null;
-        }
-
-        if (decimalMatcher.matchesAllOf(normalized)) {
+        if (!normalized.isEmpty() && decimalMatcher.matchesAllOf(normalized)) {
             try {
                 double seconds = Double.parseDouble(normalized);
                 return (long) (seconds * 1e9d);
             } catch (NumberFormatException e) {
-                if (log.isWarnEnabled()) {
-                    if (logLimiter.tryAcquire()) {
-                        log.warn("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
-                    } else if (log.isDebugEnabled()) {
-                        log.debug("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value), e);
-                    }
-                }
-                return null;
+                exception = e;
             }
         }
 
+        if (log.isWarnEnabled()) {
+            if (logLimiter.tryAcquire()) {
+                log.warn("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
+            } else if (log.isDebugEnabled()) {
+                log.debug("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value), exception);
+            }
+        }
         return null;
     }
 

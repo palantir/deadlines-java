@@ -55,11 +55,14 @@ class DeadlinesTest {
         "'   1.523  ', 1523000000",
     })
     public void test_header_value_to_duration(String input, long expectedNanos) {
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(input)).isNotNull().isEqualTo(expectedNanos);
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(input))
+                .isNotNull()
+                .isEqualTo(expectedNanos)
+                .isEqualTo(Math.round(Double.parseDouble(input) * 1_000_000_000L));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", " ", ",", ".", "d", " 1,234", "-1.234", "1.234e5"})
+    @ValueSource(strings = {"", " ", ",", ".", "d", "1,234", "-1.234", "1.234e5"})
     public void test_invalid_header_value_to_duration(String headerValue) {
         assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
     }
