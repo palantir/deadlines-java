@@ -17,8 +17,8 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
-import com.google.common.primitives.Doubles;
 import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
@@ -43,6 +43,8 @@ public final class Deadlines {
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+    private static final CharMatcher decimalMatcher =
+            CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
 
     /**
      * Get the amount of time remaining for the current deadline.
@@ -196,23 +198,25 @@ public final class Deadlines {
     @Nullable
     @VisibleForTesting
     static Long tryParseSecondsToNanoseconds(String value) {
-        if (Strings.isNullOrEmpty(value)) {
-            return null;
-        }
-
-        Double seconds = Doubles.tryParse(value);
-        if (seconds == null) {
-            if (log.isWarnEnabled()) {
-                if (logLimiter.tryAcquire()) {
-                    log.warn("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
-                } else if (log.isDebugEnabled()) {
-                    log.debug("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
-                }
+        NumberFormatException exception = null;
+        String normalized = Strings.nullToEmpty(value).trim();
+        if (!normalized.isEmpty() && decimalMatcher.matchesAllOf(normalized)) {
+            try {
+                double seconds = Double.parseDouble(normalized);
+                return (long) (seconds * 1e9d);
+            } catch (NumberFormatException e) {
+                exception = e;
             }
-            return null;
         }
 
-        return (long) (seconds * 1e9d);
+        if (log.isWarnEnabled()) {
+            if (logLimiter.tryAcquire()) {
+                log.warn("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value));
+            } else if (log.isDebugEnabled()) {
+                log.debug("Failed to parse 'Expect-Within' header value", SafeArg.of("value", value), exception);
+            }
+        }
+        return null;
     }
 
     public interface RequestEncodingAdapter<REQUEST> {

@@ -32,6 +32,7 @@ import java.util.Optional;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class DeadlinesTest {
@@ -50,15 +51,25 @@ class DeadlinesTest {
         assertThat(headerValue).isEqualTo("1.523");
     }
 
-    @Test
-    public void test_header_value_to_duration() {
-        assertThat(Deadlines.tryParseSecondsToNanoseconds("1.523"))
+    @ParameterizedTest
+    @CsvSource({
+        "1, 1000000000",
+        "' 2. ', 2000000000",
+        "3.0, 3000000000",
+        "3.1, 3100000000",
+        "1234567890.12345, 1234567890123450112",
+        "1.523, 1523000000",
+        "'   1.523  ', 1523000000",
+    })
+    public void test_header_value_to_duration(String input, long expectedNanos) {
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(input))
                 .isNotNull()
-                .isEqualTo(Duration.ofMillis(1523).toNanos());
+                .isEqualTo(expectedNanos)
+                .isEqualTo(Math.round(Double.parseDouble(input) * 1_000_000_000L));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", " ", ",", ".", "d"})
+    @ValueSource(strings = {"", " ", ",", ".", "d", "1,234", "-1.234", "1.234e5"})
     public void test_invalid_header_value_to_duration(String headerValue) {
         assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
     }
