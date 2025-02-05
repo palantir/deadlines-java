@@ -16,7 +16,7 @@
 
 package com.palantir.deadlines;
 
-import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -42,6 +42,28 @@ class DeadlinesTest {
         long duration = Duration.ofMillis(-2).toNanos();
         String headerValue = Deadlines.durationToHeaderValue(duration);
         assertThat(headerValue).isEqualTo("0");
+    }
+
+    @Test
+    public void test_duration_to_header_value_ceiling_on_millis() {
+        assertThat(Deadlines.durationToHeaderValue(1)).isEqualTo("0.001");
+        assertThat(Deadlines.durationToHeaderValue(1000001)).isEqualTo("0.002");
+        assertThat(Deadlines.durationToHeaderValue(1999999)).isEqualTo("0.002");
+        assertThat(Deadlines.durationToHeaderValue(9999999)).isEqualTo("0.010");
+        assertThat(Deadlines.durationToHeaderValue(10000001)).isEqualTo("0.011");
+        assertThat(Deadlines.durationToHeaderValue(19999999)).isEqualTo("0.020");
+        assertThat(Deadlines.durationToHeaderValue(99999999)).isEqualTo("0.100");
+        assertThat(Deadlines.durationToHeaderValue(1000000001)).isEqualTo("1.001");
+        assertThat(Deadlines.durationToHeaderValue(1999999999)).isEqualTo("2.000");
+    }
+
+    @Test
+    public void test_duration_to_header_value_avoids_overflow() {
+        long duration = Long.MAX_VALUE;
+        long expected = 9223372036853999616L;
+        String headerValue = Deadlines.durationToHeaderValue(duration);
+        Long parsed = Deadlines.tryParseSecondsToNanoseconds(headerValue);
+        assertThat(parsed).isEqualTo(expected);
     }
 
     @Test
@@ -107,9 +129,8 @@ class DeadlinesTest {
     public void encode_to_request_uses_smaller_deadline_from_internal_state() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> inboundRequest = new HashMap<>();
-            inboundRequest.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            long originalDeadline = Duration.ofSeconds(1).toNanos();
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline));
             Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
 
             Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
@@ -122,9 +143,7 @@ class DeadlinesTest {
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
                         Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
-                        assertThat(parsed)
-                                .isNotNull()
-                                .isLessThanOrEqualTo(stateDeadline.get().toNanos());
+                        assertThat(parsed).isNotNull().isLessThanOrEqualTo(originalDeadline);
                     });
         }
     }

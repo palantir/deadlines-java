@@ -181,15 +181,27 @@ public final class Deadlines {
     static String durationToHeaderValue(long durationNanos) {
         if (durationNanos <= 0) {
             // avoid incorrectly encoding negative values
-            // eventually, checkExpiration will throw before we even get here
             return "0";
         }
-        // avoid operations on double and String.format
-        return (durationNanos / 1000000000)
+        // this algorithm's precision only affords up to milliseconds, so we take the ceiling of the millis value.
+        // this helps avoid pathological scenarios where a deadline is propoagated through a deep call stack
+        // very quickly (at sub-millisecond precision); without adjusting to the ceiling, we would potentially
+        // lose at least 1ms off the deadline on each RPC call which might cause request chains to abort
+        // even though very little wall-clock time had elapsed.
+        // instead, rounding the milliseconds protects against that scenario, at the expense of possibly
+        // allowing requests with a deadline of < 1ms (or, very close to expiring) to continue.
+        //
+        // take the ceiling on the milliseconds here, and also avoid a potential overflow scenario;
+        // if we are close to Long.MAX_VALUE, the deadline is already very, very large and there's not much
+        // reason to round up to the nearest millisecond anyway.
+        long ceilingMilliNanos = durationNanos < (Long.MAX_VALUE - 999999 /*precomputed by the compiler*/)
+                ? durationNanos + 999999
+                : durationNanos;
+        return (ceilingMilliNanos / 1000000000)
                 + "."
-                + ((int) (durationNanos % 1000000000) / 100000000)
-                + ((int) (durationNanos % 100000000) / 10000000)
-                + ((int) (durationNanos % 10000000) / 1000000);
+                + ((int) (ceilingMilliNanos % 1000000000) / 100000000)
+                + ((int) (ceilingMilliNanos % 100000000) / 10000000)
+                + ((int) (ceilingMilliNanos % 10000000) / 1000000);
     }
 
     /**
