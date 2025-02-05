@@ -177,10 +177,10 @@ public final class Deadlines {
     // returns "1.523"
     @VisibleForTesting
     static String durationToHeaderValue(long durationNanos) {
-        if (durationNanos <= 0) {
-            // avoid incorrectly encoding negative values
-            // eventually, checkExpiration will throw before we even get here
-            return "0";
+        if (durationNanos <= 1000000) {
+            // avoid incorrectly encoding negative values, or values that are sufficiently small to encode to
+            // "0.000" anyway
+            return "0.000";
         }
         // avoid operations on double and String.format
         return (durationNanos / 1000000000)
