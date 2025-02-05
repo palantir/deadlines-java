@@ -177,17 +177,17 @@ public final class Deadlines {
     // returns "1.523"
     @VisibleForTesting
     static String durationToHeaderValue(long durationNanos) {
-        if (durationNanos <= 1000000) {
-            // avoid incorrectly encoding negative values, or values that are sufficiently small to encode to
-            // "0.000" anyway
-            return "0.000";
+        if (durationNanos <= 0) {
+            // avoid incorrectly encoding negative values
+            return "0";
         }
         // avoid operations on double and String.format
         return (durationNanos / 1000000000)
                 + "."
                 + ((int) (durationNanos % 1000000000) / 100000000)
                 + ((int) (durationNanos % 100000000) / 10000000)
-                + ((int) (durationNanos % 10000000) / 1000000);
+                // use the ceiling on milliseconds; avoids cutting off requests with very small deadlines
+                + ((int) Math.ceil(durationNanos % 10000000 / 1000000d));
     }
 
     /**

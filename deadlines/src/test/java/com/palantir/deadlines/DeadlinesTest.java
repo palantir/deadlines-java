@@ -40,14 +40,18 @@ class DeadlinesTest {
     public void test_duration_to_header_value_avoids_encoding_negative_values() {
         long duration = Duration.ofMillis(-2).toNanos();
         String headerValue = Deadlines.durationToHeaderValue(duration);
-        assertThat(headerValue).isEqualTo("0.000");
+        assertThat(headerValue).isEqualTo("0");
     }
 
     @Test
-    public void test_duration_to_header_value_very_small_values() {
-        long duration = Duration.ofNanos(999999).toNanos();
+    public void test_duration_to_header_value_ceiling_on_millis() {
+        long duration = Duration.ofNanos(1).toNanos();
         String headerValue = Deadlines.durationToHeaderValue(duration);
-        assertThat(headerValue).isEqualTo("0.000");
+        assertThat(headerValue).isEqualTo("0.001");
+
+        long duration2 = Duration.ofNanos(1000001).toNanos();
+        String headerValue2 = Deadlines.durationToHeaderValue(duration2);
+        assertThat(headerValue2).isEqualTo("0.002");
     }
 
     @Test
