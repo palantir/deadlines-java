@@ -16,7 +16,7 @@
 
 package com.palantir.deadlines;
 
-import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -45,49 +45,24 @@ class DeadlinesTest {
 
     @Test
     public void test_duration_to_header_value_ceiling_on_millis() {
-        long duration = Duration.ofNanos(1).toNanos();
-        String headerValue = Deadlines.durationToHeaderValue(duration);
-        assertThat(headerValue).isEqualTo("0.001");
-
-        long duration2 = Duration.ofNanos(1000001).toNanos();
-        String headerValue2 = Deadlines.durationToHeaderValue(duration2);
-        assertThat(headerValue2).isEqualTo("0.002");
-
-        long duration3 = Duration.ofNanos(1999999).toNanos();
-        String headerValue3 = Deadlines.durationToHeaderValue(duration3);
-        assertThat(headerValue3).isEqualTo("0.002");
-
-        long duration4 = Duration.ofNanos(9999999).toNanos();
-        String headerValue4 = Deadlines.durationToHeaderValue(duration4);
-        assertThat(headerValue4).isEqualTo("0.010");
-
-        long duration5 = Duration.ofNanos(10000001).toNanos();
-        String headerValue5 = Deadlines.durationToHeaderValue(duration5);
-        assertThat(headerValue5).isEqualTo("0.011");
-
-        long duration6 = Duration.ofNanos(19999999).toNanos();
-        String headerValue6 = Deadlines.durationToHeaderValue(duration6);
-        assertThat(headerValue6).isEqualTo("0.020");
-
-        long duration7 = Duration.ofNanos(99999999).toNanos();
-        String headerValue7 = Deadlines.durationToHeaderValue(duration7);
-        assertThat(headerValue7).isEqualTo("0.100");
-
-        long duration8 = Duration.ofNanos(1000000001).toNanos();
-        String headerValue8 = Deadlines.durationToHeaderValue(duration8);
-        assertThat(headerValue8).isEqualTo("1.001");
-
-        long duration9 = Duration.ofNanos(1999999999).toNanos();
-        String headerValue9 = Deadlines.durationToHeaderValue(duration9);
-        assertThat(headerValue9).isEqualTo("2.000");
+        assertThat(Deadlines.durationToHeaderValue(1)).isEqualTo("0.001");
+        assertThat(Deadlines.durationToHeaderValue(1000001)).isEqualTo("0.002");
+        assertThat(Deadlines.durationToHeaderValue(1999999)).isEqualTo("0.002");
+        assertThat(Deadlines.durationToHeaderValue(9999999)).isEqualTo("0.010");
+        assertThat(Deadlines.durationToHeaderValue(10000001)).isEqualTo("0.011");
+        assertThat(Deadlines.durationToHeaderValue(19999999)).isEqualTo("0.020");
+        assertThat(Deadlines.durationToHeaderValue(99999999)).isEqualTo("0.100");
+        assertThat(Deadlines.durationToHeaderValue(1000000001)).isEqualTo("1.001");
+        assertThat(Deadlines.durationToHeaderValue(1999999999)).isEqualTo("2.000");
     }
 
     @Test
     public void test_duration_to_header_value_avoids_overflow() {
-        long duration = Duration.ofNanos(Long.MAX_VALUE).toNanos();
+        long duration = Long.MAX_VALUE;
+        long expected = 9223372036853999616L;
         String headerValue = Deadlines.durationToHeaderValue(duration);
         Long parsed = Deadlines.tryParseSecondsToNanoseconds(headerValue);
-        assertThat(parsed).isNotNull().isPositive();
+        assertThat(parsed).isEqualTo(expected);
     }
 
     @Test
