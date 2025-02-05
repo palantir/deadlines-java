@@ -93,14 +93,6 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
-        if (adapter.containsHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN)) {
-            if (log.isDebugEnabled()) {
-                log.debug(
-                        "Outgoing request already contains an Expect-Within header, current state will not be encoded");
-            }
-            return;
-        }
-
         Optional<RemainingDeadline> deadlineFromState = getRemainingDeadlineInternal();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (deadlineFromState.isEmpty()) {
@@ -220,10 +212,6 @@ public final class Deadlines {
 
     public interface RequestEncodingAdapter<REQUEST> {
         void setHeader(REQUEST request, String headerName, String headerValue);
-
-        default boolean containsHeader(REQUEST request, String headerName) {
-            return false;
-        }
     }
 
     public interface RequestDecodingAdapter<REQUEST> {

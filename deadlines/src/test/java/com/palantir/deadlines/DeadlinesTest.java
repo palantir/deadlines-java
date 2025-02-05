@@ -16,7 +16,7 @@
 
 package com.palantir.deadlines;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -136,30 +136,6 @@ class DeadlinesTest {
     }
 
     @Test
-    public void encode_to_request_which_already_contains_valid_deadline_header() {
-        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
-            Map<String, String> outboundRequest = new HashMap<>();
-            String originalValue = "60.1";
-            outboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, originalValue);
-            Duration providedDeadline = Duration.ofSeconds(2);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
-            assertThat(outboundRequest).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN, originalValue);
-        }
-    }
-
-    @Test
-    public void encode_to_request_which_already_contains_invalid_deadline_header() {
-        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
-            Map<String, String> outboundRequest = new HashMap<>();
-            String originalValue = "foo";
-            outboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, originalValue);
-            Duration providedDeadline = Duration.ofSeconds(2);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
-            assertThat(outboundRequest).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN, originalValue);
-        }
-    }
-
-    @Test
     public void parse_from_request_noop_when_no_header_present() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
@@ -262,11 +238,6 @@ class DeadlinesTest {
         @Override
         public void setHeader(Map<String, String> headers, String headerName, String headerValue) {
             headers.put(headerName, headerValue);
-        }
-
-        @Override
-        public boolean containsHeader(Map<String, String> stringStringMap, String headerName) {
-            return stringStringMap.containsKey(headerName);
         }
     }
 
