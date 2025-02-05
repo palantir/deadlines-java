@@ -176,7 +176,6 @@ public final class Deadlines {
     //     durationToHeaderValue(1523000000L)
     // returns "1.523"
     @VisibleForTesting
-    @SuppressWarnings("unused")
     static String durationToHeaderValue(long durationNanos) {
         if (durationNanos <= 0) {
             // avoid incorrectly encoding negative values
