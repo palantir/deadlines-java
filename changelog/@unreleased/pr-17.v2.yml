@@ -1,0 +1,5 @@
+type: fix
+fix:
+  description: Handline invalid durations
+  links:
+  - https://github.com/palantir/deadlines-java/pull/17
