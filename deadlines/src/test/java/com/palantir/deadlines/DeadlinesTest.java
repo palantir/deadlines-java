@@ -143,9 +143,8 @@ class DeadlinesTest {
     public void encode_to_request_uses_smaller_deadline_from_internal_state() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> inboundRequest = new HashMap<>();
-            inboundRequest.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            long originalDeadline = Duration.ofSeconds(1).toNanos();
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline));
             Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
 
             Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
@@ -158,9 +157,7 @@ class DeadlinesTest {
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
                         Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
-                        assertThat(parsed)
-                                .isNotNull()
-                                .isLessThanOrEqualTo(stateDeadline.get().toNanos());
+                        assertThat(parsed).isNotNull().isLessThanOrEqualTo(originalDeadline);
                     });
         }
     }
