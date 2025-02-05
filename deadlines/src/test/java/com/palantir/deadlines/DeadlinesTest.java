@@ -37,6 +37,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 class DeadlinesTest {
 
     @Test
+    public void test_duration_to_header_value_avoids_encoding_negative_values() {
+        long duration = Duration.ofMillis(-2).toNanos();
+        String headerValue = Deadlines.durationToHeaderValue(duration);
+        assertThat(headerValue).isEqualTo("0");
+    }
+
+    @Test
     public void test_duration_to_header_value() {
         long duration = Duration.ofMillis(1523).toNanos();
         String headerValue = Deadlines.durationToHeaderValue(duration);
