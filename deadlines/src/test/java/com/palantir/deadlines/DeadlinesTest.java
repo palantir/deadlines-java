@@ -31,6 +31,8 @@ import java.util.Map;
 import java.util.Optional;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class DeadlinesTest {
 
@@ -43,9 +45,15 @@ class DeadlinesTest {
 
     @Test
     public void test_header_value_to_duration() {
-        String headerValue = "1.523";
-        long duration = Deadlines.headerValueToDuration(headerValue);
-        assertThat(duration).isEqualTo(Duration.ofMillis(1523).toNanos());
+        assertThat(Deadlines.tryParseSecondsToNanoseconds("1.523"))
+                .isNotNull()
+                .isEqualTo(Duration.ofMillis(1523).toNanos());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " ", ",", ".", "d"})
+    public void test_invalid_header_value_to_duration(String headerValue) {
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
     }
 
     @Test
@@ -95,8 +103,9 @@ class DeadlinesTest {
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
-                        long parsed = Deadlines.headerValueToDuration(h);
+                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
                         assertThat(parsed)
+                                .isNotNull()
                                 .isLessThanOrEqualTo(stateDeadline.get().toNanos());
                     });
         }
@@ -120,7 +129,7 @@ class DeadlinesTest {
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
-                        long parsed = Deadlines.headerValueToDuration(h);
+                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
                         assertThat(parsed).isLessThanOrEqualTo(providedDeadline.toNanos());
                     });
         }

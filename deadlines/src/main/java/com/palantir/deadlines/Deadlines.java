@@ -17,12 +17,15 @@
 package com.palantir.deadlines;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
+import com.google.common.primitives.Doubles;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.TraceLocal;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.Optional;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Utility methods for working with deadlines.
@@ -124,7 +127,7 @@ public final class Deadlines {
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
         Optional<Long> headerDeadline = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN)
-                .map(Deadlines::headerValueToDuration);
+                .map(Deadlines::tryParseSecondsToNanoseconds);
 
         if (headerDeadline.isPresent() && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
@@ -175,10 +178,21 @@ public final class Deadlines {
                 + ((int) (durationNanos % 10000000) / 1000000);
     }
 
-    // converts a String representing seconds (or fractions thereof) to nanoseconds
+    /**
+     * Parses a String representing seconds (or fractions thereof) to nanoseconds; otherwise null if invalid.
+     */
+    @Nullable
     @VisibleForTesting
-    static long headerValueToDuration(String value) {
-        double seconds = Double.parseDouble(value);
+    static Long tryParseSecondsToNanoseconds(String value) {
+        if (Strings.isNullOrEmpty(value)) {
+            return null;
+        }
+
+        Double seconds = Doubles.tryParse(value);
+        if (seconds == null) {
+            return null;
+        }
+
         return (long) (seconds * 1e9d);
     }
 
