@@ -17,7 +17,7 @@
 package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
