@@ -17,11 +17,13 @@
 package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
+import com.palantir.deadlines.api.DeadlineExpiredException;
 import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.tracing.CloseableTracer;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
@@ -232,7 +234,9 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
 
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
             assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
@@ -262,7 +266,9 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
