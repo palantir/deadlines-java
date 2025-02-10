@@ -18,6 +18,7 @@ package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -306,7 +307,9 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
 
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
             assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
@@ -335,7 +338,9 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
