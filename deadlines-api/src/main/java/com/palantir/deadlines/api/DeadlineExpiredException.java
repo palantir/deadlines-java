@@ -25,7 +25,7 @@ import java.util.List;
  * Indicates that a deadline has expired.
  */
 public abstract sealed class DeadlineExpiredException extends RuntimeException implements SafeLoggable {
-    protected static final List<Arg<?>> EMPTY_ARGS = List.of();
+    private static final List<Arg<?>> EMPTY_ARGS = List.of();
 
     private DeadlineExpiredException(String message) {
         super(message);
