@@ -4,6 +4,7 @@ com.palantir.tracing:* = 6.20.0
 com.palantir.tritium:* = 0.96.0
 
 # test dependencies
+net.jqwik:* = 1.9.2
 org.assertj:assertj-core = 3.27.3
 org.junit.jupiter:* = 5.11.4
 org.awaitility:awaitility = 4.2.2

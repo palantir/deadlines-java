@@ -41,3 +41,6 @@ reports/
 
 # Gradle JDKs setup
 !gradle/*
+
+# Jqwik property based testing
+.jqwik-database

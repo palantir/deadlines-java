@@ -49,6 +49,12 @@ allprojects {
 
     group 'com.palantir.deadlines'
     version System.env.CIRCLE_TAG ?: rootProject.version
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform {
+            includeEngines 'jqwik', 'junit-jupiter'
+        }
+    }
 }
 
 jdks {
