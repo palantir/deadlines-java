@@ -17,6 +17,7 @@
 package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -29,6 +30,14 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import net.jqwik.api.ForAll;
+import net.jqwik.api.GenerationMode;
+import net.jqwik.api.Property;
+import net.jqwik.api.constraints.AlphaChars;
+import net.jqwik.api.constraints.LowerChars;
+import net.jqwik.api.constraints.NumericChars;
+import net.jqwik.api.constraints.StringLength;
+import net.jqwik.api.constraints.Whitespace;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -75,25 +84,93 @@ class DeadlinesTest {
 
     @ParameterizedTest
     @CsvSource({
+        "0, 0",
+        "0.0, 0",
         "1, 1000000000",
+        "01, 1000000000",
+        "09, 9000000000",
+        "1.0, 1000000000",
+        "1.00000, 1000000000",
+        " 123.4567890246, 123456789024",
         "' 2. ', 2000000000",
         "3.0, 3000000000",
         "3.1, 3100000000",
         "1234567890.12345, 1234567890123450112",
         "1.523, 1523000000",
         "'   1.523  ', 1523000000",
+        "1234567890123467890123467890123467890123467890123467890123467890, 9223372036854775807",
+        "12345678901234678901234678901234678901234678901234678901234678901.123467890123467890, 9223372036854775807",
     })
     public void test_header_value_to_duration(String input, long expectedNanos) {
         assertThat(Deadlines.tryParseSecondsToNanoseconds(input))
                 .isNotNull()
                 .isEqualTo(expectedNanos)
-                .isEqualTo(Math.round(Double.parseDouble(input) * 1_000_000_000L));
+                .isEqualTo((long) (Double.parseDouble(input) * 1_000_000_000.0));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", " ", ",", ".", "d", "1,234", "-1.234", "1.234e5"})
+    @ValueSource(
+            strings = {
+                "", // Empty string
+                " ", // String with only a space
+                ",", // String with only a comma
+                ".", // String with only a decimal
+                "foo", // alpha only
+                "1,234", // comma separator
+                "1e", // exponent
+                "1.2.3", // Double decimal
+                "1 2", // numbers with space
+                "1.2 3", // decimal with space
+                "12x", //
+                ".", // Decimal only
+                "-1.-2-3", //
+                "-123", // Negative integer
+                "-123.456", // Negative decimal
+                "1.234e5", // Scientific notation
+                "123.456e2", // Scientific notation
+                "-123.456e-2", // Negative number in scientific notation
+                "1.23E4", // Uppercase scientific notation
+                "1,234.56", // Comma as a thousand separator (if locale supports it)
+                "abc", // Non-numeric characters
+                "123abc", // Mixed numeric and non-numeric characters
+                "123..456", // Multiple decimal points
+                "-123.-456", // Misplaced negative sign
+                "123e", // Incomplete scientific notation
+                "e123", // Scientific notation without base
+                "123e++10", // Invalid exponent format
+                "123,456.78", // Comma as a thousand separator without proper locale
+                "123.456.789", // Multiple decimal points
+                "NaN", // Special floating-point value
+                "Infinity", // Special floating-point value
+                "-Infinity", // Negative special floating-point value
+                "0x123", // Hexadecimal notation
+            })
     public void test_invalid_header_value_to_duration(String headerValue) {
         assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
+    }
+
+    @Property(tries = 100_000, generation = GenerationMode.AUTO)
+    void check_tryParseSecondsToNanoseconds_successfully_parses_numeric_values(
+            @ForAll @NumericChars @StringLength(min = 1, max = 100) String integer,
+            @ForAll @NumericChars @StringLength(min = 1, max = 100) String decimal) {
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(integer))
+                .isNotNull()
+                .isGreaterThanOrEqualTo(0)
+                .isLessThanOrEqualTo(Long.MAX_VALUE);
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(decimal))
+                .isNotNull()
+                .isGreaterThanOrEqualTo(0)
+                .isLessThanOrEqualTo(Long.MAX_VALUE);
+        assertThat(Deadlines.tryParseSecondsToNanoseconds(integer + '.' + decimal))
+                .isNotNull()
+                .isGreaterThanOrEqualTo(0)
+                .isLessThanOrEqualTo(Long.MAX_VALUE);
+    }
+
+    @Property(tries = 100_000, generation = GenerationMode.AUTO)
+    void check_tryParseSecondsToNanoseconds_handles_inputs(
+            @ForAll @AlphaChars @NumericChars @Whitespace @LowerChars @StringLength(min = 0, max = 100) String input) {
+        assertThatCode(() -> Deadlines.tryParseSecondsToNanoseconds(input)).doesNotThrowAnyException();
     }
 
     @Test
