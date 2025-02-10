@@ -161,12 +161,10 @@ class DeadlinesTest {
                 .isNotNull()
                 .isGreaterThanOrEqualTo(0)
                 .isLessThanOrEqualTo(Long.MAX_VALUE);
-        ;
         assertThat(Deadlines.tryParseSecondsToNanoseconds(integer + '.' + decimal))
                 .isNotNull()
                 .isGreaterThanOrEqualTo(0)
                 .isLessThanOrEqualTo(Long.MAX_VALUE);
-        ;
     }
 
     @Property(tries = 100_000, generation = GenerationMode.AUTO)
