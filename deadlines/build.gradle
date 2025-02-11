@@ -15,7 +15,6 @@ dependencies {
 
     testImplementation "org.junit.jupiter:junit-jupiter"
     testImplementation "org.assertj:assertj-core"
-    testImplementation "org.awaitility:awaitility"
     testImplementation 'net.jqwik:jqwik-api'
 
     testRuntimeOnly 'net.jqwik:jqwik'
