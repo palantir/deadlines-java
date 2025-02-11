@@ -361,7 +361,7 @@ class DeadlinesTest {
         }
     }
 
-    private static final class TestClock implements Deadlines.DeadlineClock {
+    private static final class TestClock implements Deadlines.Clock {
         private long elapsed = 0L;
 
         @Override

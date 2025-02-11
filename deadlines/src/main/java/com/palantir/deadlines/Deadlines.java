@@ -46,7 +46,7 @@ public final class Deadlines {
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
 
-    private static DeadlineClock clock = DefaultClock.INSTANCE;
+    private static Clock clock = System::nanoTime;
 
     /**
      * Get the amount of time remaining for the current deadline.
@@ -234,7 +234,7 @@ public final class Deadlines {
     }
 
     @VisibleForTesting
-    static void setClock(DeadlineClock newClock) {
+    static void setClock(Clock newClock) {
         clock = newClock;
     }
 
@@ -258,13 +258,7 @@ public final class Deadlines {
         }
     }
 
-    interface DeadlineClock {
-        default long nanoTime() {
-            return System.nanoTime();
-        }
-    }
-
-    private enum DefaultClock implements DeadlineClock {
-        INSTANCE;
+    interface Clock {
+        long nanoTime();
     }
 }
