@@ -1,8 +1,0 @@
-apply plugin: 'com.palantir.external-publish-jar'
-apply plugin: 'org.revapi.revapi-gradle-plugin'
-
-dependencies {
-    api "com.palantir.safe-logging:safe-logging"
-    testImplementation "org.junit.jupiter:junit-jupiter"
-    testImplementation "org.assertj:assertj-core"
-}

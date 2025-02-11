@@ -21,7 +21,6 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
-import com.palantir.deadlines.api.DeadlinesHttpHeaders;
 import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;

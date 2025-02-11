@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.palantir.deadlines.api;
+package com.palantir.deadlines;
 
 import com.palantir.logsafe.Arg;
 import com.palantir.logsafe.Safe;
