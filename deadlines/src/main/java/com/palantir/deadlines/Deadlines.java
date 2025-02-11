@@ -46,6 +46,8 @@ public final class Deadlines {
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
 
+    private static DeadlineClock clock = DefaultClock.INSTANCE;
+
     /**
      * Get the amount of time remaining for the current deadline.
      *
@@ -72,7 +74,7 @@ public final class Deadlines {
             return Optional.empty();
         }
         // compute the remaining deadline relative to the current wall clock (may be negative)
-        long elapsed = System.nanoTime() - providedDeadline.wallClockNanos();
+        long elapsed = getClockNanoTime() - providedDeadline.wallClockNanos();
         long remaining = providedDeadline.valueNanos() - elapsed;
         return Optional.of(new RemainingDeadline(remaining, providedDeadline.internal()));
     }
@@ -160,7 +162,7 @@ public final class Deadlines {
 
     private static void storeDeadline(long deadline, boolean internal) {
         checkExpiration(deadline, internal);
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, System.nanoTime(), internal);
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal);
         deadlineState.set(providedDeadline);
     }
 
@@ -231,6 +233,15 @@ public final class Deadlines {
         return null;
     }
 
+    @VisibleForTesting
+    static void setClock(DeadlineClock newClock) {
+        clock = newClock;
+    }
+
+    private static long getClockNanoTime() {
+        return clock.nanoTime();
+    }
+
     public interface RequestEncodingAdapter<REQUEST> {
         void setHeader(REQUEST request, String headerName, String headerValue);
     }
@@ -245,5 +256,15 @@ public final class Deadlines {
         Duration asDuration() {
             return valueNanos <= 0 ? Duration.ZERO : Duration.ofNanos(valueNanos);
         }
+    }
+
+    interface DeadlineClock {
+        default long nanoTime() {
+            return System.nanoTime();
+        }
+    }
+
+    private enum DefaultClock implements DeadlineClock {
+        INSTANCE;
     }
 }

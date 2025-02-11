@@ -38,7 +38,6 @@ import net.jqwik.api.constraints.LowerChars;
 import net.jqwik.api.constraints.NumericChars;
 import net.jqwik.api.constraints.StringLength;
 import net.jqwik.api.constraints.Whitespace;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -269,6 +268,8 @@ class DeadlinesTest {
 
     @Test
     public void test_expiration_get_remaining_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
@@ -276,18 +277,17 @@ class DeadlinesTest {
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
 
-            // pollInSameThread is necessary for the polling function's call to getRemainingDeadline
-            // to read state from the TraceLocal
-            Awaitility.pollInSameThread();
-            Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-                assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
-            });
+            clock.elapsed += 2_000_000;
+
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
         }
     }
 
     @Test
     public void test_encode_to_request_expiration_external_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
@@ -295,12 +295,10 @@ class DeadlinesTest {
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
 
-            // wait until we know the deadline has expired
-            Awaitility.pollInSameThread();
-            Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-                assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
-            });
+            clock.elapsed += 2_000_000;
+
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired(Expired_Cause.EXTERNAL);
@@ -317,7 +315,9 @@ class DeadlinesTest {
     }
 
     @Test
-    public void test_encode_to_request_expiration_internal_deadline() {
+    public void test_encode_to_request_expiration_internal_deadline_2() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(100);
@@ -325,12 +325,9 @@ class DeadlinesTest {
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.of(Duration.ofMillis(1)), request, DummyRequestDecoder.INSTANCE);
 
-            // wait until we know the deadline has expired
-            Awaitility.pollInSameThread();
-            Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-                assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
-            });
+            clock.elapsed += 2_000_000;
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired(Expired_Cause.EXTERNAL);
@@ -361,6 +358,15 @@ class DeadlinesTest {
         @Override
         public Optional<String> getFirstHeader(Map<String, String> headers, String headerName) {
             return Optional.ofNullable(headers.get(headerName));
+        }
+    }
+
+    private static final class TestClock implements Deadlines.DeadlineClock {
+        private long elapsed = 0L;
+
+        @Override
+        public long nanoTime() {
+            return elapsed;
         }
     }
 }
