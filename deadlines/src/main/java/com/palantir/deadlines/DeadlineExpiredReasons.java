@@ -22,7 +22,15 @@ public class DeadlineExpiredReasons {
 
     public static <T> void encodeToResponse(
             DeadlineExpiredException exception, T response, ResponseEncodingAdapter<T> adapter) {
-        adapter.setHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, getExpirationReason(exception));
+        if (exception instanceof DeadlineExpiredException.External) {
+            adapter.setStatus(response, 400);
+            adapter.setHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "external");
+        } else if (exception instanceof DeadlineExpiredException.Internal) {
+            adapter.setStatus(response, 500);
+            adapter.setHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "internal");
+        } else {
+            adapter.setStatus(response, 500);
+        }
     }
 
     public static <T> Optional<DeadlineExpiredException> parseFromResponse(
@@ -35,18 +43,10 @@ public class DeadlineExpiredReasons {
         });
     }
 
-    private static String getExpirationReason(DeadlineExpiredException exception) {
-        if (exception instanceof DeadlineExpiredException.External) {
-            return "external";
-        } else if (exception instanceof DeadlineExpiredException.Internal) {
-            return "internal";
-        } else {
-            return "unknown";
-        }
-    }
-
     public interface ResponseEncodingAdapter<RESPONSE> {
         void setHeader(RESPONSE response, String headerName, String headerValue);
+
+        void setStatus(RESPONSE response, int status);
     }
 
     public interface ResponseDecodingAdapter<RESPONSE> {
