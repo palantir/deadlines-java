@@ -24,7 +24,9 @@ import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
+import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.DetachedSpan;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
@@ -317,7 +319,7 @@ class DeadlinesTest {
     }
 
     @Test
-    public void test_encode_to_request_expiration_internal_deadline_2() {
+    public void test_encode_to_request_expiration_internal_deadline() {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
@@ -344,6 +346,108 @@ class DeadlinesTest {
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
+        }
+    }
+
+    @Test
+    public void test_rpc_expiration_1hop_external() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+
+        Map<String, String> request = new HashMap<>();
+        Duration clientDeadline = Duration.ofSeconds(1);
+        Deadlines.encodeToRequest(clientDeadline, request, DummyRequestEncoder.INSTANCE);
+
+        DetachedSpan span = DetachedSpan.start("test");
+        try (CloseableSpan ignored = span.attach()) {
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
+            clock.elapsed += Duration.ofSeconds(5).toNanos();
+            // simulate making another outbound request, which should throw
+            Map<String, String> serverRequest = new HashMap<>();
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(1), serverRequest, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+        }
+    }
+
+    @Test
+    public void test_rpc_expiration_1hop_internal() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+
+        Map<String, String> request = new HashMap<>();
+        Duration clientDeadline = Duration.ofSeconds(1);
+        Deadlines.encodeToRequest(clientDeadline, request, DummyRequestEncoder.INSTANCE);
+
+        DetachedSpan span = DetachedSpan.start("test");
+        try (CloseableSpan ignored = span.attach()) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofMillis(500)), /* server has an internal deadline smaller than the client's */
+                    request,
+                    DummyRequestDecoder.INSTANCE);
+            clock.elapsed += Duration.ofMillis(600).toNanos();
+
+            Map<String, String> serverRequest = new HashMap<>();
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(1), serverRequest, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
+        }
+    }
+
+    @Test
+    public void test_rpc_expiration_2hop_external_then_internal() {
+        // client provides large initial deadline
+        // server1 has a self-imposed smaller deadline
+        // server1 sends request to server2 with this much smaller deadline
+        // server2 unable to meet server1 deadline
+        // server2 throws "external" expiration
+        // enough time elapses such that server1's internally imposed deadline has expired
+        // server1 throws "internal" expiration
+
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+
+        Map<String, String> clientRequest = new HashMap<>();
+        Duration clientDeadline = Duration.ofSeconds(1);
+        Deadlines.encodeToRequest(clientDeadline, clientRequest, DummyRequestEncoder.INSTANCE);
+
+        DetachedSpan server1Span = DetachedSpan.start("server1");
+        DetachedSpan server2Span = DetachedSpan.start("server2");
+
+        try (CloseableSpan ignored = server1Span.attach()) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofMillis(200)), /* server1 has smaller internally imposed deadline */
+                    clientRequest,
+                    DummyRequestDecoder.INSTANCE);
+            clock.elapsed += Duration.ofMillis(100).toNanos();
+            Map<String, String> server1Request = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(500), /* server1 should select smaller internal deadline */
+                    server1Request,
+                    DummyRequestEncoder.INSTANCE);
+
+            assertThat(server1Request)
+                    .containsKey(DeadlinesHttpHeaders.EXPECT_WITHIN)
+                    .containsValue("0.100");
+
+            try (CloseableSpan ignored2 = server2Span.attach()) {
+                Deadlines.parseFromRequest(Optional.empty(), server1Request, DummyRequestDecoder.INSTANCE);
+                clock.elapsed += Duration.ofMillis(1500).toNanos();
+
+                // server2 should throw an external error
+                Map<String, String> server2Request = new HashMap<>();
+                assertThatThrownBy(() -> {
+                            Deadlines.encodeToRequest(
+                                    Duration.ofSeconds(100), server2Request, DummyRequestEncoder.INSTANCE);
+                        })
+                        .isInstanceOf(DeadlineExpiredException.External.class);
+            }
+
+            assertThatThrownBy(() -> {
+                        Deadlines.encodeToRequest(
+                                Duration.ofSeconds(100), server1Request, DummyRequestEncoder.INSTANCE);
+                    })
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
         }
     }
 
