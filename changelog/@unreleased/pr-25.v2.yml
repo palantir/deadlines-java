@@ -1,0 +1,5 @@
+type: improvement
+improvement:
+  description: add DeadlineExpiredException
+  links:
+  - https://github.com/palantir/deadlines-java/pull/25

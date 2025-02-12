@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-package com.palantir.deadlines.api;
+package com.palantir.deadlines;
 
-public interface DeadlinesHttpHeaders {
+interface DeadlinesHttpHeaders {
     String EXPECT_WITHIN = "Expect-Within";
 }
