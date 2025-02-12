@@ -18,7 +18,9 @@ package com.palantir.deadlines;
 
 import java.util.Optional;
 
-public class DeadlineExpiredReasons {
+public final class DeadlineExpiredReasons {
+
+    private DeadlineExpiredReasons() {}
 
     public static <T> void encodeToResponse(
             DeadlineExpiredException exception, T response, ResponseEncodingAdapter<T> adapter) {
