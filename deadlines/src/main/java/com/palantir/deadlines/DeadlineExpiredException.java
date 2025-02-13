@@ -31,6 +31,8 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         super(message);
     }
 
+    public abstract <T> T accept(Visitor<T> visitor);
+
     public static External external() {
         return new External();
     }
@@ -58,6 +60,11 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         public List<Arg<?>> getArgs() {
             return EMPTY_ARGS;
         }
+
+        @Override
+        public <T> T accept(Visitor<T> visitor) {
+            return visitor.visit(this);
+        }
     }
 
     /**
@@ -78,6 +85,31 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         @Override
         public List<Arg<?>> getArgs() {
             return EMPTY_ARGS;
+        }
+
+        @Override
+        public <T> T accept(Visitor<T> visitor) {
+            return visitor.visit(this);
+        }
+    }
+
+    public interface Visitor<T> {
+        T visit(External external);
+
+        T visit(Internal internal);
+    }
+
+    public enum HttpResponseCodeVisitor implements Visitor<Integer> {
+        INSTANCE;
+
+        @Override
+        public Integer visit(External _external) {
+            return 400;
+        }
+
+        @Override
+        public Integer visit(Internal _internal) {
+            return 500;
         }
     }
 }
