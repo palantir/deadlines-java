@@ -45,11 +45,8 @@ public final class DeadlineExpiredReasons {
         if (exception instanceof DeadlineExpiredException.External) {
             // external deadline expiration is considered a client error
             return 400;
-        } else if (exception instanceof DeadlineExpiredException.Internal) {
-            // internal deadline expiration is considered a server error
-            return 500;
         } else {
-            // anything else is considered a server error
+            // internal (or any other type) deadline expiration is considered a server error
             return 500;
         }
     }
