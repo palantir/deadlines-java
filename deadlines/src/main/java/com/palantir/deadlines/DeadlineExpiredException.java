@@ -31,8 +31,6 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         super(message);
     }
 
-    public abstract int httpStatusCode();
-
     public static External external() {
         return new External();
     }
@@ -60,12 +58,6 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         public List<Arg<?>> getArgs() {
             return EMPTY_ARGS;
         }
-
-        @Override
-        public int httpStatusCode() {
-            // external deadline expiration is considered a client error
-            return 400;
-        }
     }
 
     /**
@@ -86,12 +78,6 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         @Override
         public List<Arg<?>> getArgs() {
             return EMPTY_ARGS;
-        }
-
-        @Override
-        public int httpStatusCode() {
-            // internal deadline expiration is considered a server error
-            return 500;
         }
     }
 }

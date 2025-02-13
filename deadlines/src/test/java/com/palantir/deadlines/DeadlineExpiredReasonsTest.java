@@ -28,9 +28,9 @@ class DeadlineExpiredReasonsTest {
 
     @Test
     public void encodes_external_to_response() {
-        DeadlineExpiredException exception = DeadlineExpiredException.external();
+        DeadlineExpiredException.External exception = DeadlineExpiredException.external();
         TestResponse response = new TestResponse();
-        response.status = exception.httpStatusCode();
+        response.status = DeadlineExpiredReasons.getHttpStatusCode(exception);
         DeadlineExpiredReasons.encodeToResponse(exception, response, Encoder.INSTANCE);
         assertThat(response.status).isEqualTo(400);
         assertThat(response.headers).contains(entry(DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "external"));
@@ -38,9 +38,9 @@ class DeadlineExpiredReasonsTest {
 
     @Test
     public void encodes_internal_to_response() {
-        DeadlineExpiredException exception = DeadlineExpiredException.internal();
+        DeadlineExpiredException.Internal exception = DeadlineExpiredException.internal();
         TestResponse response = new TestResponse();
-        response.status = exception.httpStatusCode();
+        response.status = DeadlineExpiredReasons.getHttpStatusCode(exception);
         DeadlineExpiredReasons.encodeToResponse(DeadlineExpiredException.internal(), response, Encoder.INSTANCE);
         assertThat(response.status).isEqualTo(500);
         assertThat(response.headers).contains(entry(DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "internal"));

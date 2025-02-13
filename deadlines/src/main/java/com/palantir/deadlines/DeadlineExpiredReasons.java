@@ -41,6 +41,16 @@ public final class DeadlineExpiredReasons {
         });
     }
 
+    public static int getHttpStatusCode(DeadlineExpiredException.External _exception) {
+        // external deadline expiration is considered a client error
+        return 400;
+    }
+
+    public static int getHttpStatusCode(DeadlineExpiredException.Internal _exception) {
+        // internal deadline expiration is considered a server error
+        return 500;
+    }
+
     public interface ResponseEncodingAdapter<RESPONSE> {
         void setHeader(RESPONSE response, String headerName, String headerValue);
     }
