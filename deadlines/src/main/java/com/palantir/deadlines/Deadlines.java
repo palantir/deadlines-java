@@ -136,21 +136,19 @@ public final class Deadlines {
      */
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
-        Optional<Long> headerDeadline = adapter.getFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN)
-                .map(Deadlines::tryParseSecondsToNanoseconds);
-
-        if (headerDeadline.isPresent() && internalDeadline.isEmpty()) {
+        Long headerDeadline =
+                tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
+        if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
-            storeDeadline(headerDeadline.get(), false);
-        } else if (headerDeadline.isEmpty() && internalDeadline.isPresent()) {
+            storeDeadline(headerDeadline, false);
+        } else if (headerDeadline == null && internalDeadline.isPresent()) {
             // use the deadline provided to this method, which is considered internal
             storeDeadline(internalDeadline.get().toNanos(), true);
-        } else if (headerDeadline.isPresent()) {
+        } else if (headerDeadline != null) {
             // both present, so use the one that's lower
-            long headerDeadlineValue = headerDeadline.get();
             long internalDeadlineValue = internalDeadline.get().toNanos();
-            if (headerDeadlineValue <= internalDeadlineValue) {
-                storeDeadline(headerDeadlineValue, false);
+            if (headerDeadline <= internalDeadlineValue) {
+                storeDeadline(headerDeadline, false);
             } else {
                 storeDeadline(internalDeadlineValue, true);
             }
@@ -210,7 +208,10 @@ public final class Deadlines {
      */
     @Nullable
     @VisibleForTesting
-    static Long tryParseSecondsToNanoseconds(String value) {
+    static Long tryParseSecondsToNanoseconds(@Nullable String value) {
+        if (value == null) {
+            return null;
+        }
         NumberFormatException exception = null;
         String normalized = Strings.nullToEmpty(value).trim();
         if (!normalized.isEmpty() && decimalMatcher.matchesAllOf(normalized)) {
@@ -246,7 +247,11 @@ public final class Deadlines {
     }
 
     public interface RequestDecodingAdapter<REQUEST> {
+        @Deprecated
         Optional<String> getFirstHeader(REQUEST request, String headerName);
+
+        @Nullable
+        String maybeFirstHeader(REQUEST request, String headerName);
     }
 
     private record ProvidedDeadline(long valueNanos, long wallClockNanos, boolean internal) {}
