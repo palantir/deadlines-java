@@ -17,6 +17,7 @@
 package com.palantir.deadlines;
 
 import java.util.Optional;
+import javax.annotation.Nullable;
 
 public final class DeadlineExpiredReasons {
 
@@ -26,36 +27,62 @@ public final class DeadlineExpiredReasons {
             DeadlineExpiredException exception, T response, ResponseEncodingAdapter<T> adapter) {
         if (exception instanceof DeadlineExpiredException.External) {
             adapter.setHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "external");
+            // external deadline expiration is considered a client error
+            adapter.setStatus(response, 400);
         } else if (exception instanceof DeadlineExpiredException.Internal) {
             adapter.setHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON, "internal");
+            // server deadline expiration is considered a server error
+            adapter.setStatus(response, 500);
         }
     }
 
+    @Deprecated
     public static <T> Optional<DeadlineExpiredException> parseFromResponse(
             T response, ResponseDecodingAdapter<T> adapter) {
         Optional<String> reason = adapter.getFirstHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON);
-        return reason.flatMap(s -> switch (s) {
-            case "external" -> Optional.of(DeadlineExpiredException.external());
-            case "internal" -> Optional.of(DeadlineExpiredException.internal());
-            default -> Optional.empty();
+        int status = adapter.getStatus(response);
+        return reason.flatMap(r -> {
+            if (r.equalsIgnoreCase("external") && status == 400) {
+                return Optional.of(DeadlineExpiredException.external());
+            } else if (r.equalsIgnoreCase("internal") && status == 500) {
+                return Optional.of(DeadlineExpiredException.internal());
+            } else {
+                return Optional.empty();
+            }
         });
     }
 
-    public static int getHttpStatusCode(DeadlineExpiredException exception) {
-        if (exception instanceof DeadlineExpiredException.External) {
-            // external deadline expiration is considered a client error
-            return 400;
+    public static <T> @Nullable DeadlineExpiredException maybeParseFromResponse(
+            T response, ResponseDecodingAdapter<T> adapter) {
+        String reason = adapter.maybeFirstHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON);
+        int status = adapter.getStatus(response);
+        if (reason == null) {
+            return null;
+        }
+        if (reason.equalsIgnoreCase("external") && status == 400) {
+            return DeadlineExpiredException.external();
+        } else if (reason.equalsIgnoreCase("internal") && status == 500) {
+            return DeadlineExpiredException.internal();
         } else {
-            // internal (or any other type) deadline expiration is considered a server error
-            return 500;
+            return null;
         }
     }
 
     public interface ResponseEncodingAdapter<RESPONSE> {
         void setHeader(RESPONSE response, String headerName, String headerValue);
+
+        void setStatus(RESPONSE response, int status);
     }
 
     public interface ResponseDecodingAdapter<RESPONSE> {
-        Optional<String> getFirstHeader(RESPONSE response, String headerName);
+        @Deprecated
+        default Optional<String> getFirstHeader(RESPONSE response, String headerName) {
+            return Optional.empty();
+        }
+
+        @Nullable
+        String maybeFirstHeader(RESPONSE response, String headerName);
+
+        int getStatus(RESPONSE response);
     }
 }
