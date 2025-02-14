@@ -251,7 +251,9 @@ public final class Deadlines {
         Optional<String> getFirstHeader(REQUEST request, String headerName);
 
         @Nullable
-        String maybeFirstHeader(REQUEST request, String headerName);
+        default String maybeFirstHeader(REQUEST request, String headerName) {
+            return null;
+        }
     }
 
     private record ProvidedDeadline(long valueNanos, long wallClockNanos, boolean internal) {}
