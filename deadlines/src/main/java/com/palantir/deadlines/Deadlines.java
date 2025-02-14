@@ -252,7 +252,7 @@ public final class Deadlines {
 
         @Nullable
         default String maybeFirstHeader(REQUEST request, String headerName) {
-            return null;
+            return getFirstHeader(request, headerName).orElse(null);
         }
     }
 
