@@ -18,4 +18,5 @@ package com.palantir.deadlines;
 
 interface DeadlinesHttpHeaders {
     String EXPECT_WITHIN = "Expect-Within";
+    String DEADLINE_EXPIRED_REASON = "Deadline-Expired-Reason";
 }

@@ -1,0 +1,5 @@
+type: improvement
+improvement:
+  description: add header for hinting at expiration reasons
+  links:
+  - https://github.com/palantir/deadlines-java/pull/30
