@@ -16,7 +16,6 @@
 
 package com.palantir.deadlines;
 
-import java.util.Optional;
 import javax.annotation.Nullable;
 
 public final class DeadlineExpiredReasons {
@@ -34,22 +33,6 @@ public final class DeadlineExpiredReasons {
             // server deadline expiration is considered a server error
             adapter.setStatus(response, 500);
         }
-    }
-
-    @Deprecated
-    public static <T> Optional<DeadlineExpiredException> parseFromResponse(
-            T response, ResponseDecodingAdapter<T> adapter) {
-        Optional<String> reason = adapter.getFirstHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON);
-        int status = adapter.getStatus(response);
-        return reason.flatMap(r -> {
-            if (r.equalsIgnoreCase("external") && status == 400) {
-                return Optional.of(DeadlineExpiredException.external());
-            } else if (r.equalsIgnoreCase("internal") && status == 500) {
-                return Optional.of(DeadlineExpiredException.internal());
-            } else {
-                return Optional.empty();
-            }
-        });
     }
 
     public static <T> @Nullable DeadlineExpiredException maybeParseFromResponse(
@@ -75,11 +58,6 @@ public final class DeadlineExpiredReasons {
     }
 
     public interface ResponseDecodingAdapter<RESPONSE> {
-        @Deprecated
-        default Optional<String> getFirstHeader(RESPONSE response, String headerName) {
-            return Optional.empty();
-        }
-
         @Nullable
         String maybeFirstHeader(RESPONSE response, String headerName);
 
