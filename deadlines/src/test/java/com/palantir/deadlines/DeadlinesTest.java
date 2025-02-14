@@ -37,6 +37,7 @@ import net.jqwik.api.constraints.LowerChars;
 import net.jqwik.api.constraints.NumericChars;
 import net.jqwik.api.constraints.StringLength;
 import net.jqwik.api.constraints.Whitespace;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -355,8 +356,13 @@ class DeadlinesTest {
         INSTANCE;
 
         @Override
-        public Optional<String> getFirstHeader(Map<String, String> headers, String headerName) {
-            return Optional.ofNullable(headers.get(headerName));
+        public Optional<String> getFirstHeader(Map<String, String> _headers, String _headerName) {
+            throw new IllegalStateException("not implemented");
+        }
+
+        @Override
+        public @Nullable String maybeFirstHeader(Map<String, String> headers, String headerName) {
+            return headers.get(headerName);
         }
     }
 
