@@ -75,7 +75,25 @@ public final class Deadlines {
         // compute the remaining deadline relative to the current wall clock (may be negative)
         long elapsed = getClockNanoTime() - providedDeadline.wallClockNanos();
         long remaining = providedDeadline.valueNanos() - elapsed;
-        return Optional.of(new RemainingDeadline(remaining, providedDeadline.internal()));
+        return Optional.of(
+                new RemainingDeadline(remaining, providedDeadline.internal(), providedDeadline.disablePropagation()));
+    }
+
+    /**
+     * Disables propagation of deadline values any further for the current trace.
+     *
+     * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
+     * further operations should not be subject to deadline enforcement. Further calls to {@link #encodeToRequest}
+     * will result in a no-op assuming a deadline has previously be set for this trace (e.g. via a previous call to
+     * {@link #parseFromRequest}).
+     */
+    public static void disableFurtherDeadlinePropagation() {
+        ProvidedDeadline currentState = deadlineState.get();
+        if (currentState != null) {
+            // does not check for expiration
+            deadlineState.set(new ProvidedDeadline(
+                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
+        }
     }
 
     /**
@@ -100,20 +118,27 @@ public final class Deadlines {
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (deadlineFromState.isEmpty()) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false);
+            checkExpiration(proposedDeadlineNanos, false, false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
         } else {
             // use the minimum of proposedDeadline and the one read from state
             RemainingDeadline stateDeadline = deadlineFromState.get();
             if (proposedDeadlineNanos <= stateDeadline.valueNanos()) {
-                checkExpiration(proposedDeadlineNanos, false);
-                adapter.setHeader(
-                        request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+                checkExpiration(proposedDeadlineNanos, false, stateDeadline.disablePropagation());
+                if (!stateDeadline.disablePropagation()) {
+                    adapter.setHeader(
+                            request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+                }
             } else {
-                checkExpiration(stateDeadline.valueNanos(), stateDeadline.internal());
-                adapter.setHeader(
-                        request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(stateDeadline.valueNanos()));
+                checkExpiration(
+                        stateDeadline.valueNanos(), stateDeadline.internal(), stateDeadline.disablePropagation());
+                if (!stateDeadline.disablePropagation()) {
+                    adapter.setHeader(
+                            request,
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            durationToHeaderValue(stateDeadline.valueNanos()));
+                }
             }
         }
     }
@@ -158,12 +183,12 @@ public final class Deadlines {
     }
 
     private static void storeDeadline(long deadline, boolean internal) {
-        checkExpiration(deadline, internal);
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal);
+        checkExpiration(deadline, internal, false);
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
         deadlineState.set(providedDeadline);
     }
 
-    private static void checkExpiration(long deadline, boolean internal) {
+    private static void checkExpiration(long deadline, boolean internal, boolean _disablePropagation) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
@@ -256,9 +281,10 @@ public final class Deadlines {
         }
     }
 
-    private record ProvidedDeadline(long valueNanos, long wallClockNanos, boolean internal) {}
+    private record ProvidedDeadline(
+            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {}
 
-    private record RemainingDeadline(long valueNanos, boolean internal) {
+    private record RemainingDeadline(long valueNanos, boolean internal, boolean disablePropagation) {
         Duration asDuration() {
             return valueNanos <= 0 ? Duration.ZERO : Duration.ofNanos(valueNanos);
         }
