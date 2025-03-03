@@ -21,9 +21,9 @@ namespaces:
           - name: propagationDisabled
             values:
               - value: false
-                docs: Deadline propagation was disabled for this trace at the time
+                docs: Deadline propagation was enabled for this trace at the time
                       the deadline expiration was reached.
               - value: true
-                docs: Deadline propagation was enabled for this trace at the time
+                docs: Deadline propagation was disabled for this trace at the time
                       the deadline expiration was reached.
         docs: Marked every time a deadline expiration is reached
