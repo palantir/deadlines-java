@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
+import com.palantir.deadlines.DeadlineMetrics.Expired_PropagationDisabled;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableTracer;
@@ -301,8 +302,14 @@ class DeadlinesTest {
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter externalMeter = metrics.expired(Expired_Cause.EXTERNAL);
-            Meter internalMeter = metrics.expired(Expired_Cause.INTERNAL);
+            Meter externalMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .build();
+            Meter internalMeter = metrics.expired()
+                    .cause(Expired_Cause.INTERNAL)
+                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
 
@@ -330,8 +337,14 @@ class DeadlinesTest {
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter externalMeter = metrics.expired(Expired_Cause.EXTERNAL);
-            Meter internalMeter = metrics.expired(Expired_Cause.INTERNAL);
+            Meter externalMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .build();
+            Meter internalMeter = metrics.expired()
+                    .cause(Expired_Cause.INTERNAL)
+                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
 

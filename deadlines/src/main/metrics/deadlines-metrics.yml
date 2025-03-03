@@ -18,4 +18,12 @@ namespaces:
                 docs: A deadline expiration was caused due to the inability to meet an 
                       externally provided deadline, such as a server being unable to
                       complete required work before a client-provided deadline elapses.
+          - name: propagationDisabled
+            values:
+              - value: false
+                docs: Deadline propagation was disabled for this trace at the time
+                      the deadline expiration was reached.
+              - value: true
+                docs: Deadline propagation was enabled for this trace at the time
+                      the deadline expiration was reached.
         docs: Marked every time a deadline expiration is reached

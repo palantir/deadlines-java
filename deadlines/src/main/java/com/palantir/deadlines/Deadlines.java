@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
+import com.palantir.deadlines.DeadlineMetrics.Expired_PropagationDisabled;
 import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;
@@ -64,6 +65,9 @@ public final class Deadlines {
         if (remainingDeadline.isEmpty()) {
             return Optional.empty();
         }
+        if (remainingDeadline.get().disablePropagation()) {
+            return Optional.empty();
+        }
         return Optional.of(remainingDeadline.get().asDuration());
     }
 
@@ -83,9 +87,12 @@ public final class Deadlines {
      * Disables propagation of deadline values any further for the current trace.
      *
      * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
-     * further operations should not be subject to deadline enforcement. Further calls to {@link #encodeToRequest}
-     * will result in a no-op assuming a deadline has previously be set for this trace (e.g. via a previous call to
-     * {@link #parseFromRequest}).
+     * further operations should not be subject to deadline enforcement.
+     *
+     * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
+     * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
+     *
+     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
      */
     public static void disableFurtherDeadlinePropagation() {
         ProvidedDeadline currentState = deadlineState.get();
@@ -188,11 +195,17 @@ public final class Deadlines {
         deadlineState.set(providedDeadline);
     }
 
-    private static void checkExpiration(long deadline, boolean internal, boolean _disablePropagation) {
+    private static void checkExpiration(long deadline, boolean internal, boolean disablePropagation) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
-            metrics.expired(cause).mark();
+            Expired_PropagationDisabled propagationDisabled =
+                    disablePropagation ? Expired_PropagationDisabled.TRUE : Expired_PropagationDisabled.FALSE;
+            metrics.expired()
+                    .cause(cause)
+                    .propagationDisabled(propagationDisabled)
+                    .build()
+                    .mark();
             // TODO(blaub): throw exception instead of return
         }
     }
