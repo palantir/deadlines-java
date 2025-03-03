@@ -18,4 +18,17 @@ namespaces:
                 docs: A deadline expiration was caused due to the inability to meet an 
                       externally provided deadline, such as a server being unable to
                       complete required work before a client-provided deadline elapses.
+          - name: intent
+            docs: Describes the intent (or not) to propagate an expired deadline on
+                 further RPC calls.
+            values:
+              - value: propagate
+                docs: Deadline propagation was enabled for this trace at the time
+                      the deadline expiration was reached. This means that further
+                      RPC calls will still potentially propagate an expired deadline
+                      value.
+              - value: ignore
+                docs: Deadline propagation was disabled for this trace at the time
+                      the deadline expiration was reached. This means that further
+                      RPC calls will not propagate an expired deadline value any more.
         docs: Marked every time a deadline expiration is reached
