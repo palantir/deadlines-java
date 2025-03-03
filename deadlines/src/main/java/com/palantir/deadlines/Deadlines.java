@@ -21,7 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
-import com.palantir.deadlines.DeadlineMetrics.Expired_PropagationDisabled;
+import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;
@@ -199,13 +199,8 @@ public final class Deadlines {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
-            Expired_PropagationDisabled propagationDisabled =
-                    disablePropagation ? Expired_PropagationDisabled.TRUE : Expired_PropagationDisabled.FALSE;
-            metrics.expired()
-                    .cause(cause)
-                    .propagationDisabled(propagationDisabled)
-                    .build()
-                    .mark();
+            Expired_Intent intent = disablePropagation ? Expired_Intent.IGNORE : Expired_Intent.PROPAGATE;
+            metrics.expired().cause(cause).intent(intent).build().mark();
             // TODO(blaub): throw exception instead of return
         }
     }

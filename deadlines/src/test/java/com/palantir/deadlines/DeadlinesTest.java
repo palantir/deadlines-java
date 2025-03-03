@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
-import com.palantir.deadlines.DeadlineMetrics.Expired_PropagationDisabled;
+import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableTracer;
@@ -331,11 +331,11 @@ class DeadlinesTest {
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .intent(Expired_Intent.PROPAGATE)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .intent(Expired_Intent.PROPAGATE)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -366,11 +366,11 @@ class DeadlinesTest {
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .intent(Expired_Intent.PROPAGATE)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .intent(Expired_Intent.PROPAGATE)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -402,11 +402,11 @@ class DeadlinesTest {
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeterWillPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.FALSE)
+                    .intent(Expired_Intent.PROPAGATE)
                     .build();
             Meter externalMeterWontPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
-                    .propagationDisabled(Expired_PropagationDisabled.TRUE)
+                    .intent(Expired_Intent.IGNORE)
                     .build();
             long originalWillPropagateValue = externalMeterWillPropagate.getCount();
             long originalWontPropagateValue = externalMeterWontPropagate.getCount();
