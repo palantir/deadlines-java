@@ -61,26 +61,15 @@ public final class Deadlines {
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
-        Optional<RemainingDeadline> remainingDeadline = getRemainingDeadlineInternal();
-        if (remainingDeadline.isEmpty()) {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null) {
             return Optional.empty();
         }
-        if (remainingDeadline.get().disablePropagation()) {
+        if (stateDeadline.disablePropagation()) {
             return Optional.empty();
         }
-        return Optional.of(remainingDeadline.get().asDuration());
-    }
-
-    private static Optional<RemainingDeadline> getRemainingDeadlineInternal() {
-        ProvidedDeadline providedDeadline = deadlineState.get();
-        if (providedDeadline == null) {
-            return Optional.empty();
-        }
-        // compute the remaining deadline relative to the current wall clock (may be negative)
-        long elapsed = getClockNanoTime() - providedDeadline.wallClockNanos();
-        long remaining = providedDeadline.valueNanos() - elapsed;
-        return Optional.of(
-                new RemainingDeadline(remaining, providedDeadline.internal(), providedDeadline.disablePropagation()));
+        long remaining = stateDeadline.remainingNanos(getClockNanoTime());
+        return Optional.of(remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining));
     }
 
     /**
@@ -121,17 +110,17 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
-        Optional<RemainingDeadline> deadlineFromState = getRemainingDeadlineInternal();
+        ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
-        if (deadlineFromState.isEmpty()) {
+        if (stateDeadline == null) {
             // use proposedDeadline
             checkExpiration(proposedDeadlineNanos, false, false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
         } else {
             // use the minimum of proposedDeadline and the one read from state
-            RemainingDeadline stateDeadline = deadlineFromState.get();
-            if (proposedDeadlineNanos <= stateDeadline.valueNanos()) {
+            long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
+            if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 checkExpiration(proposedDeadlineNanos, false, stateDeadline.disablePropagation());
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
@@ -139,12 +128,12 @@ public final class Deadlines {
                 }
             } else {
                 checkExpiration(
-                        stateDeadline.valueNanos(), stateDeadline.internal(), stateDeadline.disablePropagation());
+                        remainingStateDeadlineNanos, stateDeadline.internal(), stateDeadline.disablePropagation());
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
                             DeadlinesHttpHeaders.EXPECT_WITHIN,
-                            durationToHeaderValue(stateDeadline.valueNanos()));
+                            durationToHeaderValue(remainingStateDeadlineNanos));
                 }
             }
         }
@@ -290,11 +279,10 @@ public final class Deadlines {
     }
 
     private record ProvidedDeadline(
-            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {}
-
-    private record RemainingDeadline(long valueNanos, boolean internal, boolean disablePropagation) {
-        Duration asDuration() {
-            return valueNanos <= 0 ? Duration.ZERO : Duration.ofNanos(valueNanos);
+            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
+        long remainingNanos(long currentWallClockNanos) {
+            long elapsed = currentWallClockNanos - this.wallClockNanos;
+            return valueNanos - elapsed;
         }
     }
 
