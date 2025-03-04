@@ -280,8 +280,8 @@ public final class Deadlines {
 
     private record ProvidedDeadline(
             long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
-        long remainingNanos(long wallClockNanos) {
-            long elapsed = wallClockNanos - this.wallClockNanos;
+        long remainingNanos(long currentWallClockNanos) {
+            long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
         }
     }
