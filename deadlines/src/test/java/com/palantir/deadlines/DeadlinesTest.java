@@ -24,7 +24,9 @@ import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
+import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.DetachedSpan;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
@@ -428,6 +430,72 @@ class DeadlinesTest {
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
             assertThat(externalMeterWontPropagate.getCount()).isGreaterThan(originalWontPropagateValue);
             assertThat(externalMeterWillPropagate.getCount()).isEqualTo(originalWillPropagateValue);
+        }
+    }
+
+    @Test
+    public void multihop_expired_received_deadline_marks_propagate_already_expired_meter() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+
+        DetachedSpan server1Span = DetachedSpan.start("server1");
+        DetachedSpan server2Span = DetachedSpan.start("server2");
+
+        try (CloseableSpan ignored = server1Span.attach()) {
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter expiredMeterPropagateIntent = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .build();
+            Meter expiredMeterPropagateAlreadyExpiredIntent = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
+                    .build();
+
+            // the first hop receives a valid, non-zero deadline on the wire
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
+            // nothing yet...
+            assertThat(expiredMeterPropagateIntent.getCount()).isZero();
+            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount()).isZero();
+
+            // force expiration within the first hop
+            clock.elapsed += 2_000_000;
+
+            long expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
+            long expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
+
+            Map<String, String> outbound1 = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+
+            // this hop marks the meter with the "propagate" intent, as the expiration happened here
+            assertThat(outbound1.get(DeadlinesHttpHeaders.EXPECT_WITHIN))
+                    .isNotNull()
+                    .isEqualTo("0");
+            assertThat(expiredMeterPropagateIntent.getCount()).isGreaterThan(expiredMeterPropagateIntentValue);
+            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount()).isZero();
+
+            // next hop parses a zero deadline
+            try (CloseableSpan ignored2 = server2Span.attach()) {
+                expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
+                Deadlines.parseFromRequest(Optional.empty(), outbound1, DummyRequestDecoder.INSTANCE);
+                // this hop marks the meter with the "propagate-already-expired" intent
+                assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
+                        .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
+                // meter with the "propagate" intent is unchanged
+                assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
+
+                // sending another request when the deadline has already expired should also
+                // mark the meter with the "propagate-already-expired" intent
+                expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
+                Map<String, String> outbound2 = new HashMap<>();
+                Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
+                assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
+                        .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
+            }
         }
     }
 
