@@ -27,6 +27,9 @@ namespaces:
                       the deadline expiration was reached. This means that further
                       RPC calls will still potentially propagate an expired deadline
                       value.
+              - value: propagate-already-expired
+                docs: Deadline propagation was enabled for this trace, but the deadline
+                      had already expired by the time it was first received.
               - value: ignore
                 docs: Deadline propagation was disabled for this trace at the time
                       the deadline expiration was reached. This means that further
