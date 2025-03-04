@@ -190,7 +190,6 @@ public final class Deadlines {
     }
 
     private static void storeDeadline(long deadline, boolean internal) {
-        checkExpiration(deadline, internal, false);
         ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
         deadlineState.set(providedDeadline);
     }
