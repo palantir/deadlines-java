@@ -102,11 +102,7 @@ public final class Deadlines {
         if (currentState != null) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
-                    currentState.valueNanos(),
-                    currentState.wallClockNanos(),
-                    currentState.internal(),
-                    true,
-                    currentState.alreadyExpired()));
+                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
         }
     }
 
@@ -205,10 +201,12 @@ public final class Deadlines {
     }
 
     private static void storeDeadline(long deadline, boolean internal) {
-        boolean alreadyExpired = deadline <= 0;
-        checkExpiration(deadline, internal, false, alreadyExpired);
-        ProvidedDeadline providedDeadline =
-                new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, alreadyExpired);
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
+        checkExpiration(
+                providedDeadline.valueNanos(),
+                providedDeadline.internal(),
+                providedDeadline.disablePropagation(),
+                providedDeadline.alreadyExpired());
         deadlineState.set(providedDeadline);
     }
 
@@ -313,11 +311,12 @@ public final class Deadlines {
     }
 
     private record ProvidedDeadline(
-            long valueNanos,
-            long wallClockNanos,
-            boolean internal,
-            boolean disablePropagation,
-            boolean alreadyExpired) {}
+            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
+
+        boolean alreadyExpired() {
+            return valueNanos <= 0;
+        }
+    }
 
     private record RemainingDeadline(
             long valueNanos, boolean internal, boolean disablePropagation, boolean alreadyExpired) {
