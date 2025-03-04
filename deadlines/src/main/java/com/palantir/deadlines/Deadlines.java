@@ -88,10 +88,7 @@ public final class Deadlines {
         if (currentState != null) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
-                    currentState.valueNanos(),
-                    currentState.wallClockNanos(),
-                    currentState.internal(),
-                    true);
+                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
         }
     }
 
