@@ -1,0 +1,5 @@
+type: improvement
+improvement:
+  description: Redundant calls to disablePropagation are a no-op
+  links:
+  - https://github.com/palantir/deadlines-java/pull/48

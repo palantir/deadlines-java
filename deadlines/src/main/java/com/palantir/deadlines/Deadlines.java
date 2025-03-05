@@ -85,7 +85,7 @@ public final class Deadlines {
      */
     public static void disableFurtherDeadlinePropagation() {
         ProvidedDeadline currentState = deadlineState.get();
-        if (currentState != null) {
+        if (currentState != null && !currentState.disablePropagation()) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
                     currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
