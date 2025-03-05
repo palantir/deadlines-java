@@ -29,7 +29,7 @@ import com.palantir.tracing.TraceLocal;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.Optional;
-import org.checkerframework.checker.nullness.qual.Nullable;
+import javax.annotation.Nullable;
 
 /**
  * Utility methods for working with deadlines.
