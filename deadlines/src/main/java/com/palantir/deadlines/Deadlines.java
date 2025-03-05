@@ -114,21 +114,29 @@ public final class Deadlines {
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false, false);
+            checkExpiration(proposedDeadlineNanos, false, false, false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
-                checkExpiration(proposedDeadlineNanos, false, stateDeadline.disablePropagation());
+                boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
+                checkExpiration(
+                        proposedDeadlineNanos,
+                        false,
+                        stateDeadline.disablePropagation(),
+                        proposedDeadlineAlreadyExpired);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
                 }
             } else {
                 checkExpiration(
-                        remainingStateDeadlineNanos, stateDeadline.internal(), stateDeadline.disablePropagation());
+                        remainingStateDeadlineNanos,
+                        stateDeadline.internal(),
+                        stateDeadline.disablePropagation(),
+                        stateDeadline.alreadyExpired());
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
@@ -179,16 +187,26 @@ public final class Deadlines {
     }
 
     private static void storeDeadline(long deadline, boolean internal) {
-        checkExpiration(deadline, internal, false);
         ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
+        checkExpiration(
+                providedDeadline.valueNanos(),
+                providedDeadline.internal(),
+                providedDeadline.disablePropagation(),
+                providedDeadline.alreadyExpired());
         deadlineState.set(providedDeadline);
     }
 
-    private static void checkExpiration(long deadline, boolean internal, boolean disablePropagation) {
+    private static void checkExpiration(
+            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
-            Expired_Intent intent = disablePropagation ? Expired_Intent.IGNORE : Expired_Intent.PROPAGATE;
+            Expired_Intent intent = Expired_Intent.PROPAGATE;
+            if (disablePropagation) {
+                intent = Expired_Intent.IGNORE;
+            } else if (alreadyExpired) {
+                intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
+            }
             metrics.expired().cause(cause).intent(intent).build().mark();
             // TODO(blaub): throw exception instead of return
         }
@@ -283,6 +301,10 @@ public final class Deadlines {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
+        }
+
+        boolean alreadyExpired() {
+            return valueNanos <= 0;
         }
     }
 
