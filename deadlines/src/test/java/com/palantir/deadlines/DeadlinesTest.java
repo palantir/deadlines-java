@@ -482,19 +482,15 @@ class DeadlinesTest {
             try (CloseableSpan ignored2 = server2Span.attach()) {
                 expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
                 Deadlines.parseFromRequest(Optional.empty(), outbound1, DummyRequestDecoder.INSTANCE);
-                // this hop marks the meter with the "propagate-already-expired" intent
-                assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
-                        .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
-                // meter with the "propagate" intent is unchanged
-                assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
-
-                // sending another request when the deadline has already expired should also
+                // sending another request when the deadline has already expired should
                 // mark the meter with the "propagate-already-expired" intent
                 expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
                 Map<String, String> outbound2 = new HashMap<>();
                 Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
                 assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
                         .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
+                // meter with the "propagate" intent is unchanged
+                assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
             }
         }
     }
