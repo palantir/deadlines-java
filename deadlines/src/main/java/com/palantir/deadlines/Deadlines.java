@@ -88,7 +88,11 @@ public final class Deadlines {
         if (currentState != null && !currentState.disablePropagation()) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
-                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
+                    currentState.valueNanos(),
+                    currentState.wallClockNanos(),
+                    currentState.internal(),
+                    true,
+                    currentState.enforced()));
         }
     }
 
@@ -101,50 +105,97 @@ public final class Deadlines {
      * This ensures that the deadline set for the request will be based on the remaining deadline from
      * already-set internal state, or a smaller one if the caller chooses that.
      *
+     * The enforcement flag controls whether this method should check the current deadline with enforcement, and
+     * whether an enforcement flag should be added to outbound headers as well. The actual value selected for the
+     * flag is dependent upon the context in which this method is called:
+     *   - if there is _no_ existing deadline stored in state, then the caller is assumed to be the "originator",
+     *     and enforcement is enabled if the {@code enforced} flag on this method call is true.
+     *   - if there _is_ an existing deadline stored in state, then the flag's value is taken from the stored
+     *     enforcement flag, regardless of the value of the {@code enforced} parameter to this method.
+     * The latter case is important, as we want to respect the enforcement flag provided by a caller further up
+     * in the RPC call chain even if the local caller about to send a request wants enforcement enabled (if a previous
+     * RPC call in the chain requested no enforcement, we might be stepping on their toes).
+     *
+     * When enforcement is determined to be enabled (either via the {@code enforced} parameter or via a flag already
+     * stored in deadline state), this method may throw a {@link DeadlineExpiredException} if, at the time of call,
+     * the selected deadline has already expired.
+     *
      * This function has no side-effects on the internal deadline state stored in a TraceLocal.
      *
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum of
      * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
+     * @param enforced enforce deadline expiration on this call, and propagate enforcement via a header as well
      */
     public static <T> void encodeToRequest(
-            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter, boolean enforced) {
         ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false, false, false);
+            checkExpiration(
+                    proposedDeadlineNanos,
+                    false,
+                    false,
+                    false,
+                    // we have no existing deadline in state, so the caller can dictate whether this
+                    // deadline should be enforced by receivers
+                    // this allows originators (the first to send a request with an Expect-Within header)
+                    // to control enforcement (and propagation of that enforcement) further along the call chain
+                    enforced);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+            if (enforced) {
+                adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            }
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
+            // in cases where we do have an existing deadline in state, use the enforcement flag already stored,
+            // and ignore the parameter passed here.
+            // this means that even if callers _want_ to trigger enforcement, they cannot if they are propagating
+            // an existing deadline from an upstream RPC call chain (unless _that_ caller requested enforcement)
+            boolean enforcedFromState = stateDeadline.enforced();
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
                 checkExpiration(
                         proposedDeadlineNanos,
                         false,
                         stateDeadline.disablePropagation(),
-                        proposedDeadlineAlreadyExpired);
+                        proposedDeadlineAlreadyExpired,
+                        enforcedFromState);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+                    if (enforcedFromState) {
+                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+                    }
                 }
             } else {
                 checkExpiration(
                         remainingStateDeadlineNanos,
                         stateDeadline.internal(),
                         stateDeadline.disablePropagation(),
-                        stateDeadline.alreadyExpired());
+                        stateDeadline.alreadyExpired(),
+                        enforcedFromState);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
                             DeadlinesHttpHeaders.EXPECT_WITHIN,
                             durationToHeaderValue(remainingStateDeadlineNanos));
+                    if (enforcedFromState) {
+                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+                    }
                 }
             }
         }
+    }
+
+    // for backcompat, no originator enforcement
+    public static <T> void encodeToRequest(
+            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+        encodeToRequest(proposedDeadline, request, adapter, false);
     }
 
     /**
@@ -167,32 +218,41 @@ public final class Deadlines {
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
+        String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        boolean enforced = headerEnforced != null && headerEnforced.equalsIgnoreCase("true");
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
-            storeDeadline(headerDeadline, false);
+            storeDeadline(headerDeadline, false, enforced);
         } else if (headerDeadline == null && internalDeadline.isPresent()) {
             // use the deadline provided to this method, which is considered internal
-            storeDeadline(internalDeadline.get().toNanos(), true);
+            storeDeadline(
+                    internalDeadline.get().toNanos(),
+                    true,
+                    false /* for the time being, internally-realized deadlines are never enforced */);
         } else if (headerDeadline != null) {
             // both present, so use the one that's lower
             long internalDeadlineValue = internalDeadline.get().toNanos();
             if (headerDeadline <= internalDeadlineValue) {
-                storeDeadline(headerDeadline, false);
+                storeDeadline(headerDeadline, false, enforced);
             } else {
-                storeDeadline(internalDeadlineValue, true);
+                storeDeadline(
+                        internalDeadlineValue,
+                        true,
+                        false /* for the time being, internally-realized deadlines are never enforced */);
             }
         }
 
         // no-op if neither header is present nor optional internalDeadline is present
     }
 
-    private static void storeDeadline(long deadline, boolean internal) {
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
+    private static void storeDeadline(long deadline, boolean internal, boolean enforced) {
+        ProvidedDeadline providedDeadline =
+                new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforced);
         deadlineState.set(providedDeadline);
     }
 
     private static void checkExpiration(
-            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired) {
+            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired, boolean enforced) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
@@ -203,7 +263,9 @@ public final class Deadlines {
                 intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
             }
             metrics.expired().cause(cause).intent(intent).build().mark();
-            // TODO(blaub): throw exception instead of return
+            if (enforced) {
+                throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
+            }
         }
     }
 
@@ -292,7 +354,7 @@ public final class Deadlines {
     }
 
     private record ProvidedDeadline(
-            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
+            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation, boolean enforced) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
