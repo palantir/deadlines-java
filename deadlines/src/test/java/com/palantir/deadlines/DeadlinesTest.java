@@ -191,6 +191,54 @@ class DeadlinesTest {
     }
 
     @Test
+    public void encode_to_request_adds_enforcement_flag() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration deadline = Duration.ofSeconds(1);
+            Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE, true);
+
+            assertThat(request.get(DeadlinesHttpHeaders.EXPECT_WITHIN)).isNotNull();
+            assertThat(request.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)).isEqualTo("true");
+        }
+    }
+
+    @Test
+    public void encode_to_request_omits_enforcement_flag_when_external_deadline_is_not_enforced() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> inboundRequest = new HashMap<>();
+            long originalDeadline = Duration.ofSeconds(1).toNanos();
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline));
+            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(100);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, true);
+
+            assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)).isNotNull();
+            assertThat(outboundRequest).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        }
+    }
+
+    @Test
+    public void encode_to_request_includes_enforcement_flag_when_external_deadline_is_enforced() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> inboundRequest = new HashMap<>();
+            long originalDeadline = Duration.ofSeconds(1).toNanos();
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline));
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE);
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(100);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+
+            assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)).isNotNull();
+            assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED))
+                    .isEqualTo("true");
+        }
+    }
+
+    @Test
     public void can_parse_from_request() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
