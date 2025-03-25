@@ -202,8 +202,9 @@ class DeadlinesTest {
         }
     }
 
-    @Test
-    public void encode_to_request_omits_enforcement_flag_when_external_deadline_is_not_enforced() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void encode_to_request_omits_enforcement_flag_when_external_deadline_is_not_enforced(boolean tryEnforce) {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> inboundRequest = new HashMap<>();
             long originalDeadline = Duration.ofSeconds(1).toNanos();
@@ -212,15 +213,16 @@ class DeadlinesTest {
 
             Map<String, String> outboundRequest = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(100);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, true);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, tryEnforce);
 
             assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)).isNotNull();
             assertThat(outboundRequest).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         }
     }
 
-    @Test
-    public void encode_to_request_includes_enforcement_flag_when_external_deadline_is_enforced() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    public void encode_to_request_includes_enforcement_flag_when_external_deadline_is_enforced(boolean tryEnforce) {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> inboundRequest = new HashMap<>();
             long originalDeadline = Duration.ofSeconds(1).toNanos();
@@ -230,7 +232,7 @@ class DeadlinesTest {
 
             Map<String, String> outboundRequest = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(100);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, tryEnforce);
 
             assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)).isNotNull();
             assertThat(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED))
