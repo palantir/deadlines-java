@@ -295,8 +295,10 @@ class DeadlinesTest {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
 
-        DetachedSpan server1Span = DetachedSpan.start("server1");
-        DetachedSpan server2Span = DetachedSpan.start("server2");
+        // Server 1 makes calls to Server2 and Server3
+        DetachedSpan server1Span = DetachedSpan.start("server1-enforced");
+        DetachedSpan server2Span = DetachedSpan.start("server2-enforced");
+        DetachedSpan server3Span = DetachedSpan.start("server3-enforced");
 
         try (CloseableSpan ignored = server1Span.attach()) {
             Map<String, String> request = new HashMap<>();
@@ -321,8 +323,8 @@ class DeadlinesTest {
                             outboundRequestFromFirstServer.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
                     .hasValue("true");
 
-            // Second hop
-            try (CloseableSpan ignored2 = server2Span.attach()) {
+            // Server 1 calls Server 2
+            try (CloseableSpan ignored2 = server3Span.attach()) {
                 Deadlines.parseFromRequest(
                         Optional.empty(), outboundRequestFromFirstServer, DummyRequestDecoder.INSTANCE, true, true);
 
@@ -335,6 +337,30 @@ class DeadlinesTest {
                 assertThatThrownBy(() -> Deadlines.encodeToRequest(
                                 providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE))
                         .isInstanceOf(External.class);
+            }
+
+            // Server 1 calls Server 3
+            try (CloseableSpan ignored2 = server2Span.attach()) {
+                // Server 3 does not set enforcement
+                Deadlines.parseFromRequest(
+                        Optional.empty(), outboundRequestFromFirstServer, DummyRequestDecoder.INSTANCE);
+
+                // Check that deadline remaining is less than the provided deadline
+                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+                assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThan(providedDeadline));
+
+                // shouldThrow was set not set, so we don't expect an exception
+                Map<String, String> outboundRequest = new HashMap<>();
+                Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+                assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
+                        .hasValueSatisfying(h -> {
+                            Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                            assertThat(parsed).isNotNull().isLessThanOrEqualTo(providedDeadline.toNanos());
+                        });
+
+                // we should have read the header from the first server
+                assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
+                        .hasValue("true");
             }
         }
     }
