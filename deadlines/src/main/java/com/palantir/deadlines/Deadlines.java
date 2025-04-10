@@ -73,7 +73,7 @@ public final class Deadlines {
     }
 
     /**
-     * Disables propagation of deadline values any further for the current trace.
+     * Disables propagation of deadline/enforcement values any further for the current trace.
      *
      * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
      * further operations should not be subject to deadline enforcement.
@@ -88,7 +88,11 @@ public final class Deadlines {
         if (currentState != null && !currentState.disablePropagation()) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
-                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
+                    currentState.valueNanos(),
+                    currentState.wallClockNanos(),
+                    currentState.internal(),
+                    true,
+                    currentState.enforcementState()));
         }
     }
 
@@ -114,7 +118,7 @@ public final class Deadlines {
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false, false, false);
+            checkExpiration(proposedDeadlineNanos, false, false, false, false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
         } else {
@@ -126,7 +130,8 @@ public final class Deadlines {
                         proposedDeadlineNanos,
                         false,
                         stateDeadline.disablePropagation(),
-                        proposedDeadlineAlreadyExpired);
+                        proposedDeadlineAlreadyExpired,
+                        stateDeadline.enforcementState() == EnforcementState.ENFORCED_THROW);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
@@ -136,7 +141,8 @@ public final class Deadlines {
                         remainingStateDeadlineNanos,
                         stateDeadline.internal(),
                         stateDeadline.disablePropagation(),
-                        stateDeadline.alreadyExpired());
+                        stateDeadline.alreadyExpired(),
+                        stateDeadline.enforcementState() == EnforcementState.ENFORCED_THROW);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
@@ -144,7 +150,16 @@ public final class Deadlines {
                             durationToHeaderValue(remainingStateDeadlineNanos));
                 }
             }
+            if (stateDeadline.enforcementState() == EnforcementState.ENFORCED_THROW
+                    || stateDeadline.enforcementState() == EnforcementState.ENFORCED_DONT_THROW) {
+                adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            }
         }
+    }
+
+    public static <T> void parseFromRequest(
+            Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
+        parseFromRequest(internalDeadline, request, adapter, false, false);
     }
 
     /**
@@ -164,35 +179,54 @@ public final class Deadlines {
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      */
     public static <T> void parseFromRequest(
-            Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
+            Optional<Duration> internalDeadline,
+            T request,
+            RequestDecodingAdapter<? super T> adapter,
+            boolean enforce,
+            boolean shouldThrow) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
+        boolean enforced;
+        if (enforce) {
+            enforced = true;
+        } else {
+            String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+            enforced = headerEnforced != null && headerEnforced.equalsIgnoreCase("true");
+        }
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
-            storeDeadline(headerDeadline, false);
+            storeDeadline(headerDeadline, false, enforced, shouldThrow);
         } else if (headerDeadline == null && internalDeadline.isPresent()) {
             // use the deadline provided to this method, which is considered internal
-            storeDeadline(internalDeadline.get().toNanos(), true);
+            storeDeadline(internalDeadline.get().toNanos(), true, enforced, shouldThrow);
         } else if (headerDeadline != null) {
             // both present, so use the one that's lower
             long internalDeadlineValue = internalDeadline.get().toNanos();
             if (headerDeadline <= internalDeadlineValue) {
-                storeDeadline(headerDeadline, false);
+                storeDeadline(headerDeadline, false, enforced, shouldThrow);
             } else {
-                storeDeadline(internalDeadlineValue, true);
+                storeDeadline(internalDeadlineValue, true, enforced, shouldThrow);
             }
         }
 
         // no-op if neither header is present nor optional internalDeadline is present
     }
 
-    private static void storeDeadline(long deadline, boolean internal) {
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
+    private static void storeDeadline(long deadline, boolean internal, boolean enforced, boolean shouldThrow) {
+        ProvidedDeadline providedDeadline = new ProvidedDeadline(
+                deadline, getClockNanoTime(), internal, false, getEnforcementState(enforced, shouldThrow));
         deadlineState.set(providedDeadline);
     }
 
+    private static EnforcementState getEnforcementState(boolean enforced, boolean shouldThrow) {
+        if (enforced) {
+            return shouldThrow ? EnforcementState.ENFORCED_THROW : EnforcementState.ENFORCED_DONT_THROW;
+        }
+        return EnforcementState.NOT_ENFORCED;
+    }
+
     private static void checkExpiration(
-            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired) {
+            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired, boolean shouldThrow) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
@@ -203,7 +237,9 @@ public final class Deadlines {
                 intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
             }
             metrics.expired().cause(cause).intent(intent).build().mark();
-            // TODO(blaub): throw exception instead of return
+            if (shouldThrow) {
+                throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
+            }
         }
     }
 
@@ -292,7 +328,11 @@ public final class Deadlines {
     }
 
     private record ProvidedDeadline(
-            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
+            long valueNanos,
+            long wallClockNanos,
+            boolean internal,
+            boolean disablePropagation,
+            EnforcementState enforcementState) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
@@ -301,6 +341,12 @@ public final class Deadlines {
         boolean alreadyExpired() {
             return valueNanos <= 0;
         }
+    }
+
+    private enum EnforcementState {
+        NOT_ENFORCED,
+        ENFORCED_THROW,
+        ENFORCED_DONT_THROW
     }
 
     interface Clock {

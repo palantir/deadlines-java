@@ -18,8 +18,10 @@ package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
+import com.palantir.deadlines.DeadlineExpiredException.External;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
@@ -201,6 +203,139 @@ class DeadlinesTest {
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(providedDeadline));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    public void can_parse_from_request_with_enforcement(boolean shouldThrow) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration originalDeadline = Duration.ofSeconds(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, true, shouldThrow);
+
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(originalDeadline));
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(2);
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+
+            assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
+                    .hasValueSatisfying(h -> {
+                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                        assertThat(parsed).isNotNull().isLessThanOrEqualTo(originalDeadline.toNanos());
+                    });
+
+            assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
+                    .hasValue("true");
+        }
+    }
+
+    @Test
+    public void deadline_with_throwOnExpiration_enabled_throws() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, true, true);
+
+            clock.elapsed += 2_000_000;
+
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(providedDeadline));
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(External.class);
+        }
+    }
+
+    @Test
+    public void enforced_deadline_with_throwOnExpiration_disabled_doesNotThrow() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, true, false);
+
+            clock.elapsed += 2_000_000;
+
+            // Check that deadline remaining is less than the provided deadline
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThan(providedDeadline));
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+
+            // Check that the enforcement header is set
+            assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
+                    .hasValue("true");
+
+            // Check that the deadline is set and does not throw
+            assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
+                    .hasValueSatisfying(h -> {
+                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                        assertThat(parsed).isNotNull().isLessThan(providedDeadline.toNanos());
+                    });
+        }
+    }
+
+    @Test
+    public void multihop_deadlines_with_mixed_enforcement() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+
+        DetachedSpan server1Span = DetachedSpan.start("server1");
+        DetachedSpan server2Span = DetachedSpan.start("server2");
+
+        try (CloseableSpan ignored = server1Span.attach()) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, true, false);
+
+            // Advance the clock so the deadline expires
+            clock.elapsed += 2_000_000;
+
+            Map<String, String> outboundRequestFromFirstServer = new HashMap<>();
+            // shouldThrow has been set to false, so we should not get an exception
+            Deadlines.encodeToRequest(providedDeadline, outboundRequestFromFirstServer, DummyRequestEncoder.INSTANCE);
+            assertThat(Optional.ofNullable(outboundRequestFromFirstServer.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
+                    .hasValueSatisfying(h -> {
+                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                        assertThat(parsed).isNotNull().isLessThanOrEqualTo(providedDeadline.toNanos());
+                    });
+
+            assertThat(Optional.ofNullable(
+                            outboundRequestFromFirstServer.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
+                    .hasValue("true");
+
+            // Second hop
+            try (CloseableSpan ignored2 = server2Span.attach()) {
+                Deadlines.parseFromRequest(
+                        Optional.empty(), outboundRequestFromFirstServer, DummyRequestDecoder.INSTANCE, true, true);
+
+                // Check that deadline remaining is less than the provided deadline
+                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+                assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThan(providedDeadline));
+
+                // shouldThrow was set to true, so we should get an exception
+                Map<String, String> outboundRequest = new HashMap<>();
+                assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                                providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE))
+                        .isInstanceOf(External.class);
+            }
         }
     }
 
