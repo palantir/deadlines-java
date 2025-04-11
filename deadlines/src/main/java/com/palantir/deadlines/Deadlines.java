@@ -88,7 +88,11 @@ public final class Deadlines {
         if (currentState != null && !currentState.disablePropagation()) {
             // does not check for expiration
             deadlineState.set(new ProvidedDeadline(
-                    currentState.valueNanos(), currentState.wallClockNanos(), currentState.internal(), true));
+                    currentState.valueNanos(),
+                    currentState.wallClockNanos(),
+                    currentState.internal(),
+                    true,
+                    currentState.enforced()));
         }
     }
 
@@ -114,34 +118,52 @@ public final class Deadlines {
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false, false, false);
+            checkExpiration(
+                    proposedDeadlineNanos,
+                    false,
+                    false,
+                    false,
+                    // don't bother with enforcement here
+                    // if we don't have any existing deadline state, then we're merely checking that the caller
+                    // didn't pass in a negative deadline to this method
+                    // eventually, enforcement will be on by default anyway
+                    false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
+            boolean enforced = stateDeadline.enforced();
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
                 checkExpiration(
                         proposedDeadlineNanos,
                         false,
                         stateDeadline.disablePropagation(),
-                        proposedDeadlineAlreadyExpired);
+                        proposedDeadlineAlreadyExpired,
+                        enforced);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+                    if (enforced) {
+                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+                    }
                 }
             } else {
                 checkExpiration(
                         remainingStateDeadlineNanos,
                         stateDeadline.internal(),
                         stateDeadline.disablePropagation(),
-                        stateDeadline.alreadyExpired());
+                        stateDeadline.alreadyExpired(),
+                        enforced);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
                             DeadlinesHttpHeaders.EXPECT_WITHIN,
                             durationToHeaderValue(remainingStateDeadlineNanos));
+                    if (enforced) {
+                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+                    }
                 }
             }
         }
@@ -155,6 +177,15 @@ public final class Deadlines {
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
      *
+     * Enforcement of the deadline is enabled in onw of two ways:
+     *   - Callers can set the "internalEnforced" parameter on this method to true.
+     *   - If an "Expect-Within-Enforced" header is present in the request with a value of "true",
+     *     it will enable enforcement.
+     * If either of those conditions are met, the deadline state stored in the TraceLocal will additionally
+     * set an enforcement flag. This will indicate to future calls to {@link #encodeToRequest} that it should check
+     * for and enforce expiration. It also causes those calls to further propagate an "Expect-Within-Enforced" header,
+     * so that downstream receivers will also be required to enforce the deadline expiration.
+     *
      * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers.
      *
@@ -162,37 +193,54 @@ public final class Deadlines {
      * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
+     * @param internalEnforced whether this deadline should be enforced at this hop (and all downstream receivers)
      */
     public static <T> void parseFromRequest(
-            Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
+            Optional<Duration> internalDeadline,
+            T request,
+            RequestDecodingAdapter<? super T> adapter,
+            boolean internalEnforced) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
+        String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        boolean enforced = internalEnforced || (headerEnforced != null && headerEnforced.equalsIgnoreCase("true"));
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
-            storeDeadline(headerDeadline, false);
+            storeDeadline(headerDeadline, false, enforced);
         } else if (headerDeadline == null && internalDeadline.isPresent()) {
             // use the deadline provided to this method, which is considered internal
-            storeDeadline(internalDeadline.get().toNanos(), true);
+            storeDeadline(
+                    internalDeadline.get().toNanos(),
+                    true,
+                    // avoid scenarios where Expect-Within-Enforced is present, but Expect-Within is absent
+                    internalEnforced);
         } else if (headerDeadline != null) {
             // both present, so use the one that's lower
             long internalDeadlineValue = internalDeadline.get().toNanos();
             if (headerDeadline <= internalDeadlineValue) {
-                storeDeadline(headerDeadline, false);
+                storeDeadline(headerDeadline, false, enforced);
             } else {
-                storeDeadline(internalDeadlineValue, true);
+                storeDeadline(internalDeadlineValue, true, enforced);
             }
         }
 
         // no-op if neither header is present nor optional internalDeadline is present
     }
 
-    private static void storeDeadline(long deadline, boolean internal) {
-        ProvidedDeadline providedDeadline = new ProvidedDeadline(deadline, getClockNanoTime(), internal, false);
+    @Deprecated
+    public static <T> void parseFromRequest(
+            Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
+        parseFromRequest(internalDeadline, request, adapter, false);
+    }
+
+    private static void storeDeadline(long deadline, boolean internal, boolean enforced) {
+        ProvidedDeadline providedDeadline =
+                new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforced);
         deadlineState.set(providedDeadline);
     }
 
     private static void checkExpiration(
-            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired) {
+            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired, boolean enforced) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
@@ -203,7 +251,9 @@ public final class Deadlines {
                 intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
             }
             metrics.expired().cause(cause).intent(intent).build().mark();
-            // TODO(blaub): throw exception instead of return
+            if (enforced) {
+                throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
+            }
         }
     }
 
@@ -292,7 +342,7 @@ public final class Deadlines {
     }
 
     private record ProvidedDeadline(
-            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation) {
+            long valueNanos, long wallClockNanos, boolean internal, boolean disablePropagation, boolean enforced) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
