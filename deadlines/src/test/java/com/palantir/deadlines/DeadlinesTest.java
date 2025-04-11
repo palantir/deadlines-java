@@ -18,6 +18,7 @@ package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
@@ -361,6 +362,72 @@ class DeadlinesTest {
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+        }
+    }
+
+    @Test
+    public void test_enforced_via_external_expiration_external() {
+        // validate that a received request with "Expect-Within-Enforced: true" will enforce deadline expiration
+        // at this hop. The expiration is triggered by an external deadline.
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
+
+            clock.elapsed += 2_000_000;
+
+            Map<String, String> outbound = new HashMap<>();
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(1), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+        }
+    }
+
+    @Test
+    public void test_enforced_via_external_expiration_internal() {
+        // validate that a received request with "Expect-Within-Enforced: true" will enforce deadline expiration
+        // at this hop. The expiration is triggered by an internal deadline.
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.of(Duration.ofMillis(1)), request, DummyRequestDecoder.INSTANCE);
+
+            clock.elapsed += 2_000_000;
+
+            Map<String, String> outbound = new HashMap<>();
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(1), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
+        }
+    }
+
+    @Test
+    public void test_expiration_enforced_via_internal() {
+        // validate that setting the enforcement flag at this hop will cause the next hop to enforce the deadline
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE);
+
+            clock.elapsed += 2_000_000;
+
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(1), Map.of(), DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
         }
     }
 

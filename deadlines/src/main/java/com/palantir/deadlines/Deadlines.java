@@ -238,7 +238,8 @@ public final class Deadlines {
                 storeDeadline(
                         internalDeadlineValue,
                         true,
-                        false /* for the time being, internally-realized deadlines are never enforced */);
+                        // false /* for the time being, internally-realized deadlines are never enforced */);
+                        enforced);
             }
         }
 
