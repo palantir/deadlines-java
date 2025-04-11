@@ -53,11 +53,11 @@ public final class Deadlines {
      *
      * Queries the current deadline state from a TraceLocal, and returns a {@link Duration} for the
      * amount of time remaining towards that deadline. If the deadline has already expired, then
-     * {@link Duration#ZERO} is returned.
+     * a duration less than or equal to zero is returned.
      *
      * If no deadline state has been set for the current trace, return an empty Optional.
      *
-     * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
+     * @return the remaining deadline time for the current trace, which may be negative if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
@@ -69,7 +69,7 @@ public final class Deadlines {
             return Optional.empty();
         }
         long remaining = stateDeadline.remainingNanos(getClockNanoTime());
-        return Optional.of(remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining));
+        return Optional.of(Duration.ofNanos(remaining));
     }
 
     /**
