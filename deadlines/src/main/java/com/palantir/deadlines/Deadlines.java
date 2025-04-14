@@ -130,7 +130,7 @@ public final class Deadlines {
                     false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
-            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+            // we omit the enforcement flag header here to allow the next hop to decide the enforcement strategy
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
