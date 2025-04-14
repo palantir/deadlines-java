@@ -202,8 +202,11 @@ public final class Deadlines {
             boolean internalEnforced) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
-        String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
-        boolean enforced = internalEnforced || (headerEnforced != null && headerEnforced.equalsIgnoreCase("true"));
+        boolean enforced = internalEnforced;
+        if (!enforced) {
+            String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+            enforced = headerEnforced != null && headerEnforced.equalsIgnoreCase("true");
+        }
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
             storeDeadline(headerDeadline, false, enforced);
