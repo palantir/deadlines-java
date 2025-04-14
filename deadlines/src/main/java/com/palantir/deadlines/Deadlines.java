@@ -130,6 +130,7 @@ public final class Deadlines {
                     false);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
@@ -145,9 +146,7 @@ public final class Deadlines {
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
-                    if (enforced) {
-                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
-                    }
+                    adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, Boolean.toString(enforced));
                 }
             } else {
                 checkExpiration(
@@ -161,12 +160,51 @@ public final class Deadlines {
                             request,
                             DeadlinesHttpHeaders.EXPECT_WITHIN,
                             durationToHeaderValue(remainingStateDeadlineNanos));
-                    if (enforced) {
-                        adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
-                    }
+                    adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, Boolean.toString(enforced));
                 }
             }
         }
+    }
+
+    /**
+     * Selects the enforcement strategy when parsing a deadline value from a request.
+     *
+     * Enforcement controls whether this node should enforce expirations when they happen in a future call
+     * to {@link #encodeToRequest} for the current trace. Enabling enforcement means that a {@link DeadlineExpiredException}
+     * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
+     * when encoding a deadline for a new outbound request.
+     *
+     * There are 3 possible states (described below) to control enforcement; they determine whether the current node
+     * will enforce deadline expirations here, and whether an enforcement flag may be added to future outbound requests;
+     * or whether deadline expirations will be ignored and the enforcement flag not propagated further.
+     */
+    public enum Enforcement {
+        /**
+         * ENFORCED means that future calls to {@link #encodeToRequest} will throw an exception if the deadline has
+         * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header
+         * when encoding future deadlines from the current trace to request enforcement from downstream nodes as well.
+         */
+        ENFORCED,
+
+        /**
+         * ENFORCED_IF_REQUESTED means that future calls to {@link #encodeToRequest} will throw an exception if the
+         * deadline has expired, but only if enforcement was requested at the time we parsed a deadline value from
+         * a request header (e.g. if {@link #parseFromRequest} received an
+         * {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header set to `true`). Otherwise, no deadline expiration
+         * enforcement will happen at this node, and we propagate an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
+         * header set to `false` so that downstream nodes do not enforce the deadline either.
+         */
+        ENFORCED_IF_REQUESTED,
+
+        /**
+         * IGNORED means that deadline expiration will be ignored at this node, and ALL downstream nodes, regardless
+         * of whether an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header was received with the value
+         * set to `true`. Future calls to {@link #encodeToRequest} will not throw an exception if the deadline has
+         * expired, and will set add a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header on the request to
+         * `false`. This effectively terminates deadline enforcement at this node and causes downstream nodes to
+         * ignore further enforcement for this trace, regardless of their configured enforcement state.
+         */
+        IGNORED
     }
 
     /**
@@ -193,30 +231,58 @@ public final class Deadlines {
      * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @param internalEnforced whether this deadline should be enforced at this hop (and all downstream receivers)
+     * @param enforcement configures enforcement strategy (see {@link Enforcement})
      */
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline,
             T request,
             RequestDecodingAdapter<? super T> adapter,
-            boolean internalEnforced) {
+            Enforcement enforcement) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
-        boolean enforced = internalEnforced;
-        if (!enforced) {
+
+        // check enforcement
+        // if enforcement was explicitly disabled via `Expect-Within-Enforced: false`, then we honor that
+        boolean enforced;
+        if (enforcement == Enforcement.IGNORED) {
+            enforced = false;
+        } else {
+            // check for the `Expect-Within-Enforced` flag in a header
+            // possible outcomes:
+            //   - the header is not present and enforcement == ENFORCED => enforced=true
+            //   - the header is not present and enforcement == ENFORCED_IF_REQUESTED => enforced=false
+            //   - the header is present and the value is "true" => enforced=true
+            //   - the header is present and the value is "false" => enforced=false
+            //       (the rationale for this is that even if local enforcement was requested, if an upstream hop
+            //       requested that it _not_ be enforced then we will honor that instead)
+            //   - the header is present and the value is something else => enforced=(enforcement == ENFORCED)
+            //       (the rationale for this is that if we received a bogus value, we should just make a local decision)
+            //   - the header is present, but the `Expect-Within` header is absent => enforced=(enforcement == ENFORCED)
+            //       (the rationale for this is that we are selecting our own deadline, even though we received an
+            //       enforcement flag, so we should make a local decision)
             String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
-            enforced = headerEnforced != null && headerEnforced.equalsIgnoreCase("true");
+            if (headerEnforced == null) {
+                enforced = enforcement == Enforcement.ENFORCED;
+            } else {
+                if (headerDeadline == null) {
+                    enforced = enforcement == Enforcement.ENFORCED;
+                } else {
+                    if (headerEnforced.equalsIgnoreCase("true")) {
+                        enforced = true;
+                    } else if (headerEnforced.equalsIgnoreCase("false")) {
+                        enforced = false;
+                    } else {
+                        enforced = enforcement == Enforcement.ENFORCED;
+                    }
+                }
+            }
         }
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
             storeDeadline(headerDeadline, false, enforced);
         } else if (headerDeadline == null && internalDeadline.isPresent()) {
             // use the deadline provided to this method, which is considered internal
-            storeDeadline(
-                    internalDeadline.get().toNanos(),
-                    true,
-                    // avoid scenarios where Expect-Within-Enforced is present, but Expect-Within is absent
-                    internalEnforced);
+            storeDeadline(internalDeadline.get().toNanos(), true, enforced);
         } else if (headerDeadline != null) {
             // both present, so use the one that's lower
             long internalDeadlineValue = internalDeadline.get().toNanos();
@@ -233,7 +299,8 @@ public final class Deadlines {
     @Deprecated
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
-        parseFromRequest(internalDeadline, request, adapter, false);
+        // by default use IGNORED, which matches behavior of consumers on older versions which have no enforcement
+        parseFromRequest(internalDeadline, request, adapter, Enforcement.IGNORED);
     }
 
     private static void storeDeadline(long deadline, boolean internal, boolean enforced) {
