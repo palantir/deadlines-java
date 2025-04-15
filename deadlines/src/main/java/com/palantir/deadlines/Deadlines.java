@@ -232,10 +232,12 @@ public final class Deadlines {
         // possible outcomes:
         //   - the enforcementStrategy == DISABLED => DISABLED
         //   - the header is not present => enforcementStrategy == ENFORCE ? ENFORCE : DEFER
-        //   - the header is present but the `Expect-Within` header is absent => enforcementStrategy == ENFORCED ? ENFORCE :  DEFER
+        //   - the header is present but the `Expect-Within` header is absent => enforcementStrategy == ENFORCED ?
+        // ENFORCE :  DEFER
         //   - the header is present and the value is "true" => ENFORCE
         //   - the header is present and the value is "false" => DISABLE
-        //   - the header is present and the value is something else => enforcementStrategy == ENFORCED ? ENFORCE : DEFER
+        //   - the header is present and the value is something else => enforcementStrategy == ENFORCED ? ENFORCE :
+        // DEFER
         return switch (enforcementStrategy) {
             case DISABLE -> Enforcement.DISABLE;
             case ENFORCE -> {
