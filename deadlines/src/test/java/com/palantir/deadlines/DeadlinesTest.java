@@ -732,6 +732,9 @@ class DeadlinesTest {
         // ensure that when the `Expect-Within-Enforced` flag contains an unknown value, it is ignored
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            inbound1.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "foobar");
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCED);
@@ -748,6 +751,9 @@ class DeadlinesTest {
         // ensure that when the `Expect-Within-Enforced` flag contains an unknown value, it is ignored
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            inbound1.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "foobar");
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(10)),
