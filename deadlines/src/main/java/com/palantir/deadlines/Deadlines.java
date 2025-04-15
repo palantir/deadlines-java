@@ -266,14 +266,13 @@ public final class Deadlines {
             // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
             // accordingly
             // possible outcomes:
-            //   - the header is not present => enforcement == ENFORCED ? OutboundEnforcement.ENFORCE :
-            // OutboundEnforcement.DEFER
-            //   - the header is present and the value is "true" => OutboundEnforcement.ENFORCE
-            //   - the header is present and the value is "false" => OutboundEnforcement.DISABLE
+            //   - the header is not present => enforcement == ENFORCED ? Enforcement.ENFORCE : Enforcement.DEFER
+            //   - the header is present and the value is "true" => Enforcement.ENFORCE
+            //   - the header is present and the value is "false" => Enforcement.DISABLE
             //   - the header is present and the value is something else => enforcement == ENFORCED ?
-            // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
+            // Enforcement.ENFORCE : Enforcement.DEFER
             //   - the header is present but the `Expect-Within` header is absent => enforcement == ENFORCED ?
-            // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
+            // Enforcement.ENFORCE : Enforcement.DEFER
             String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
             if (headerEnforced == null) {
                 stateEnforcement = enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
