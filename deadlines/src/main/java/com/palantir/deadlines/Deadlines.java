@@ -133,8 +133,8 @@ public final class Deadlines {
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
-            OutboundEnforcement enforcement = stateDeadline.enforcement();
-            boolean enforced = enforcement == OutboundEnforcement.ENFORCE;
+            Enforcement enforcement = stateDeadline.enforcement();
+            boolean enforced = enforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
                 checkExpiration(
@@ -167,10 +167,10 @@ public final class Deadlines {
     }
 
     private static <T> void encodeEnforcement(
-            T request, RequestEncodingAdapter<? super T> adapter, OutboundEnforcement enforcement) {
-        if (enforcement == OutboundEnforcement.ENFORCE) {
+            T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
+        if (enforcement == Enforcement.ENFORCE) {
             adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
-        } else if (enforcement == OutboundEnforcement.DISABLE) {
+        } else if (enforcement == Enforcement.DISABLE) {
             adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
     }
@@ -182,43 +182,36 @@ public final class Deadlines {
      * to {@link #encodeToRequest} for the current trace. Enabling enforcement means that a {@link DeadlineExpiredException}
      * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
      * when encoding a deadline for a new outbound request.
-     *
-     * There are 3 possible states (described below) to control enforcement; they determine whether the current node
-     * will enforce deadline expirations here, and whether an enforcement flag may be added to future outbound requests;
-     * or whether deadline expirations will be ignored and the enforcement flag not propagated further.
      */
     public enum Enforcement {
         /**
-         * ENFORCED means that future calls to {@link #encodeToRequest} will throw an exception if the deadline has
-         * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header
-         * when encoding future deadlines from the current trace to request enforcement from downstream nodes as well.
+         * ENFORCE means that future calls to {@link #encodeToRequest} will throw an exception if the deadline has
+         * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
+         * to "true" when encoding future deadlines from the current trace to request enforcement from downstream
+         * nodes as well.
          */
-        ENFORCED,
+        ENFORCE,
 
         /**
-         * ENFORCED_IF_REQUESTED means that future calls to {@link #encodeToRequest} will throw an exception if the
-         * deadline has expired, but only if enforcement was requested at the time we parsed a deadline value from
-         * a request header (e.g. if {@link #parseFromRequest} received an
-         * {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header set to `true`). Otherwise, no deadline expiration
-         * enforcement will happen at this node, and we propagate an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
-         * header set to `false` so that downstream nodes do not enforce the deadline either.
+         * DEFER means that future calls to {@link #encodeToRequest} MAY throw an exception if the deadline
+         * has expired, but only if enforcement was requested at the time we parsed a deadline value from
+         * a request header (e.g. if {@link #parseFromRequest} received an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
+         * header set to "true"). Otherwise, no deadline expiration enforcement will happen at this node, and we will
+         * omit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} headers on future outbound requests.
+         *
+         * DEFER is used to indicate that we are deferring the enforcement strategy to either the inbound request,
+         * or the next downstream hop, but will not enable enforcement here.
          */
-        ENFORCED_IF_REQUESTED,
+        DEFER,
 
         /**
-         * DISABLED means that deadline expiration will be ignored at this node, and ALL downstream nodes, regardless
+         * DISABLE means that deadline expiration will be ignored at this node, and ALL downstream nodes, regardless
          * of whether an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header was received with the value
-         * set to `true`. Future calls to {@link #encodeToRequest} will not throw an exception if the deadline has
+         * set to "true". Future calls to {@link #encodeToRequest} will not throw an exception if the deadline has
          * expired, and will set add a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header on the request to
-         * `false`. This effectively terminates deadline enforcement at this node and causes downstream nodes to
+         * "false". This effectively terminates deadline enforcement at this node and causes downstream nodes to
          * ignore further enforcement for this trace, regardless of their configured enforcement state.
          */
-        DISABLED
-    }
-
-    private enum OutboundEnforcement {
-        ENFORCE,
-        DEFER,
         DISABLE
     }
 
@@ -246,21 +239,21 @@ public final class Deadlines {
      * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @param enforcement configures enforcement strategy (see {@link Enforcement})
+     * @param localEnforcement configures enforcement strategy (see {@link Enforcement})
      */
     @SuppressWarnings("CyclomaticComplexity")
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline,
             T request,
             RequestDecodingAdapter<? super T> adapter,
-            Enforcement enforcement) {
+            Enforcement localEnforcement) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
 
         // check enforcement
-        OutboundEnforcement stateEnforcement;
-        if (enforcement == Enforcement.DISABLED) {
-            stateEnforcement = OutboundEnforcement.DISABLE;
+        Enforcement stateEnforcement;
+        if (localEnforcement == Enforcement.DISABLE) {
+            stateEnforcement = Enforcement.DISABLE;
         } else {
             // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
             // accordingly
@@ -275,22 +268,19 @@ public final class Deadlines {
             // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
             String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
             if (headerEnforced == null) {
-                stateEnforcement =
-                        enforcement == Enforcement.ENFORCED ? OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER;
+                stateEnforcement = localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
             } else {
                 if (headerDeadline == null) {
-                    stateEnforcement = enforcement == Enforcement.ENFORCED
-                            ? OutboundEnforcement.ENFORCE
-                            : OutboundEnforcement.DEFER;
+                    stateEnforcement =
+                            localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
                 } else {
                     if (headerEnforced.equalsIgnoreCase("true")) {
-                        stateEnforcement = OutboundEnforcement.ENFORCE;
+                        stateEnforcement = Enforcement.ENFORCE;
                     } else if (headerEnforced.equalsIgnoreCase("false")) {
-                        stateEnforcement = OutboundEnforcement.DISABLE;
+                        stateEnforcement = Enforcement.DISABLE;
                     } else {
-                        stateEnforcement = enforcement == Enforcement.ENFORCED
-                                ? OutboundEnforcement.ENFORCE
-                                : OutboundEnforcement.DEFER;
+                        stateEnforcement =
+                                localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
                     }
                 }
             }
@@ -318,12 +308,11 @@ public final class Deadlines {
     @Deprecated
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
-        // by default use ENFORCED_IF_REQUESTED, which matches behavior of consumers on older versions which have no
-        // enforcement
-        parseFromRequest(internalDeadline, request, adapter, Enforcement.ENFORCED_IF_REQUESTED);
+        // by default use DEFER, which matches behavior of consumers on older versions which have no enforcement
+        parseFromRequest(internalDeadline, request, adapter, Enforcement.DEFER);
     }
 
-    private static void storeDeadline(long deadline, boolean internal, OutboundEnforcement enforcement) {
+    private static void storeDeadline(long deadline, boolean internal, Enforcement enforcement) {
         ProvidedDeadline providedDeadline =
                 new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement);
         deadlineState.set(providedDeadline);
@@ -436,7 +425,7 @@ public final class Deadlines {
             long wallClockNanos,
             boolean internal,
             boolean disablePropagation,
-            OutboundEnforcement enforcement) {
+            Enforcement enforcement) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
