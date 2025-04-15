@@ -248,6 +248,7 @@ public final class Deadlines {
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      * @param enforcement configures enforcement strategy (see {@link Enforcement})
      */
+    @SuppressWarnings("CyclomaticComplexity")
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline,
             T request,
