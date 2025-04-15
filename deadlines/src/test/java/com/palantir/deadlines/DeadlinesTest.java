@@ -605,6 +605,25 @@ class DeadlinesTest {
         }
     }
 
+    @Test
+    public void test_enforcement_not_disabled_when_absent() {
+        try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+            Map<String, String> inbound1 = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            inbound1.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(
+                    Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCED_IF_REQUESTED);
+
+            // enforcement wasn't explicitly enabled or disabled at this hop; we should exclude the enforcement flag
+            // from outbound requests as well
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+
+            assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        }
+    }
+
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
         INSTANCE;
 
