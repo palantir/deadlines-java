@@ -190,6 +190,10 @@ public final class Deadlines {
          * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
          * to "true" when encoding future deadlines from the current trace to request enforcement from downstream
          * nodes as well.
+         *
+         * Note that calls to {@link #parseFromRequest} that receive an explicit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
+         * header with a value set to "false" will still override this to disable enforcement. This is intentional
+         * to allow upstream nodes to short-circuit deadline enforcement if necessary.
          */
         ENFORCE,
 
@@ -224,14 +228,13 @@ public final class Deadlines {
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
      *
-     * Enforcement of the deadline is enabled in onw of two ways:
-     *   - Callers can set the "internalEnforced" parameter on this method to true.
-     *   - If an "Expect-Within-Enforced" header is present in the request with a value of "true",
-     *     it will enable enforcement.
-     * If either of those conditions are met, the deadline state stored in the TraceLocal will additionally
-     * set an enforcement flag. This will indicate to future calls to {@link #encodeToRequest} that it should check
-     * for and enforce expiration. It also causes those calls to further propagate an "Expect-Within-Enforced" header,
-     * so that downstream receivers will also be required to enforce the deadline expiration.
+     * Enforcement of the deadline is controlled in the following way:
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DISABLE}, then it is not enforced.
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DEFER}, then the deadline is enforced
+     *     only if a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "true"
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#ENFORCE}, then the deadline is enforced
+     *   - If a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "false", then
+     *     the deadline is not enforced and the the value of "enforcementStrategy" is ignored
      *
      * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers.
@@ -240,20 +243,20 @@ public final class Deadlines {
      * lower than the one parsed from a request header
      * @param request the request object to read the deadline value from
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
-     * @param localEnforcement configures enforcement strategy (see {@link Enforcement})
+     * @param enforcementStrategy configures enforcement strategy (see {@link Enforcement})
      */
     @SuppressWarnings("CyclomaticComplexity")
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline,
             T request,
             RequestDecodingAdapter<? super T> adapter,
-            Enforcement localEnforcement) {
+            Enforcement enforcementStrategy) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
 
         // check enforcement
         Enforcement stateEnforcement;
-        if (localEnforcement == Enforcement.DISABLE) {
+        if (enforcementStrategy == Enforcement.DISABLE) {
             stateEnforcement = Enforcement.DISABLE;
         } else {
             // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
@@ -269,11 +272,11 @@ public final class Deadlines {
             // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
             String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
             if (headerEnforced == null) {
-                stateEnforcement = localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
+                stateEnforcement = enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
             } else {
                 if (headerDeadline == null) {
                     stateEnforcement =
-                            localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
+                            enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
                 } else {
                     if (headerEnforced.equalsIgnoreCase("true")) {
                         stateEnforcement = Enforcement.ENFORCE;
@@ -281,7 +284,7 @@ public final class Deadlines {
                         stateEnforcement = Enforcement.DISABLE;
                     } else {
                         stateEnforcement =
-                                localEnforcement == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
+                                enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
                     }
                 }
             }
