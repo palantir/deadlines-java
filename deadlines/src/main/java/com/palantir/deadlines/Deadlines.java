@@ -169,10 +169,14 @@ public final class Deadlines {
 
     private static <T> void encodeEnforcement(
             T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
-        if (enforcement == Enforcement.ENFORCE) {
-            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
-        } else if (enforcement == Enforcement.DISABLE) {
-            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+        String headerValue =
+                switch (enforcement) {
+                    case DISABLE -> "false";
+                    case ENFORCE -> "true";
+                    case DEFER -> null;
+                };
+        if (headerValue != null) {
+            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, headerValue);
         }
     }
 
@@ -220,6 +224,41 @@ public final class Deadlines {
         DISABLE
     }
 
+    private static <T> Enforcement resolveEnforcementStrategy(
+            T request,
+            RequestDecodingAdapter<? super T> adapter,
+            Long headerDeadline,
+            Enforcement enforcementStrategy) {
+        String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        return switch (enforcementStrategy) {
+            case DISABLE -> {
+                if (headerDeadline != null) {
+                    yield Enforcement.DISABLE;
+                }
+                yield Enforcement.DEFER;
+            }
+            case ENFORCE -> {
+                // Deadlines will be enforced unless the header explicitly disables it.
+                if (headerEnforced != null && headerEnforced.equalsIgnoreCase("false")) {
+                    yield Enforcement.DISABLE;
+                }
+                yield Enforcement.ENFORCE;
+            }
+            case DEFER -> {
+                if (headerDeadline == null || headerEnforced == null) {
+                    yield Enforcement.DEFER;
+                }
+                if (headerEnforced.equalsIgnoreCase("true")) {
+                    yield Enforcement.ENFORCE;
+                } else if (headerEnforced.equalsIgnoreCase("false")) {
+                    yield Enforcement.DISABLE;
+                } else {
+                    yield Enforcement.DEFER;
+                }
+            }
+        };
+    }
+
     /**
      * Parse a deadline value from a request header and set the deadline state for the current trace.
      *
@@ -245,7 +284,6 @@ public final class Deadlines {
      * @param adapter a {@link RequestDecodingAdapter} that handles reading the header value from the request object
      * @param enforcementStrategy configures enforcement strategy (see {@link Enforcement})
      */
-    @SuppressWarnings("CyclomaticComplexity")
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline,
             T request,
@@ -253,43 +291,8 @@ public final class Deadlines {
             Enforcement enforcementStrategy) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
-
-        // check enforcement
-        Enforcement stateEnforcement;
-        if (enforcementStrategy == Enforcement.DISABLE) {
-            stateEnforcement = Enforcement.DISABLE;
-        } else {
-            // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
-            // accordingly
-            // possible outcomes:
-            //   - the header is not present => enforcement == ENFORCED ? OutboundEnforcement.ENFORCE :
-            // OutboundEnforcement.DEFER
-            //   - the header is present and the value is "true" => OutboundEnforcement.ENFORCE
-            //   - the header is present and the value is "false" => OutboundEnforcement.DISABLE
-            //   - the header is present and the value is something else => enforcement == ENFORCED ?
-            // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
-            //   - the header is present but the `Expect-Within` header is absent => enforcement == ENFORCED ?
-            // OutboundEnforcement.ENFORCE : OutboundEnforcement.DEFER
-            String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
-            if (headerEnforced == null) {
-                stateEnforcement = enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
-            } else {
-                if (headerDeadline == null) {
-                    stateEnforcement =
-                            enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
-                } else {
-                    if (headerEnforced.equalsIgnoreCase("true")) {
-                        stateEnforcement = Enforcement.ENFORCE;
-                    } else if (headerEnforced.equalsIgnoreCase("false")) {
-                        stateEnforcement = Enforcement.DISABLE;
-                    } else {
-                        stateEnforcement =
-                                enforcementStrategy == Enforcement.ENFORCE ? Enforcement.ENFORCE : Enforcement.DEFER;
-                    }
-                }
-            }
-        }
-
+        Enforcement stateEnforcement =
+                resolveEnforcementStrategy(request, adapter, headerDeadline, enforcementStrategy);
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
             storeDeadline(headerDeadline, false, stateEnforcement);
