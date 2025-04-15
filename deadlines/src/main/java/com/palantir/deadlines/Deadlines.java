@@ -227,13 +227,15 @@ public final class Deadlines {
     private static <T> Enforcement resolveEnforcementStrategy(
             T request,
             RequestDecodingAdapter<? super T> adapter,
-            Long headerDeadline,
+            boolean headerDeadlineSet,
             Enforcement enforcementStrategy) {
         String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         return switch (enforcementStrategy) {
-            case DISABLE -> headerDeadline != null ? Enforcement.DISABLE : Enforcement.DEFER;
+            case DISABLE -> headerDeadlineSet ? Enforcement.DISABLE : Enforcement.DEFER;
             case ENFORCE -> {
-                if (headerDeadline == null) {
+                // If the header deadline is not set, set the enforcement header to the provided enforcement strategy
+                // irrespective of the existing enforcement header.
+                if (!headerDeadlineSet) {
                     yield Enforcement.ENFORCE;
                 }
                 // Deadlines will be enforced unless the header explicitly disables it.
@@ -243,7 +245,7 @@ public final class Deadlines {
                 yield Enforcement.ENFORCE;
             }
             case DEFER -> {
-                if (headerDeadline == null || headerEnforced == null) {
+                if (!headerDeadlineSet || headerEnforced == null) {
                     yield Enforcement.DEFER;
                 }
                 if (headerEnforced.equalsIgnoreCase("true")) {
@@ -290,7 +292,7 @@ public final class Deadlines {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
         Enforcement stateEnforcement =
-                resolveEnforcementStrategy(request, adapter, headerDeadline, enforcementStrategy);
+                resolveEnforcementStrategy(request, adapter, headerDeadline != null, enforcementStrategy);
         if (headerDeadline != null && internalDeadline.isEmpty()) {
             // use the deadline parsed from a header, which is considered external
             storeDeadline(headerDeadline, false, stateEnforcement);
