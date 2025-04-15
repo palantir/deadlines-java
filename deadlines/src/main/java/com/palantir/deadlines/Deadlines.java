@@ -318,8 +318,9 @@ public final class Deadlines {
     @Deprecated
     public static <T> void parseFromRequest(
             Optional<Duration> internalDeadline, T request, RequestDecodingAdapter<? super T> adapter) {
-        // by default use DISABLED, which matches behavior of consumers on older versions which have no enforcement
-        parseFromRequest(internalDeadline, request, adapter, Enforcement.DISABLED);
+        // by default use ENFORCED_IF_REQUESTED, which matches behavior of consumers on older versions which have no
+        // enforcement
+        parseFromRequest(internalDeadline, request, adapter, Enforcement.ENFORCED_IF_REQUESTED);
     }
 
     private static void storeDeadline(long deadline, boolean internal, OutboundEnforcement enforcement) {
