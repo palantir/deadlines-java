@@ -92,7 +92,8 @@ public final class Deadlines {
                     currentState.wallClockNanos(),
                     currentState.internal(),
                     true,
-                    currentState.enforcement()));
+                    // set the enforcement to DEFER to avoid having checkExpiration throw
+                    Enforcement.DEFER));
         }
     }
 
