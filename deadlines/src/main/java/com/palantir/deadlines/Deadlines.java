@@ -169,10 +169,14 @@ public final class Deadlines {
 
     private static <T> void encodeEnforcement(
             T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
-        if (enforcement == Enforcement.ENFORCE) {
-            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
-        } else if (enforcement == Enforcement.DISABLE) {
-            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+        String value =
+                switch (enforcement) {
+                    case ENFORCE -> "true";
+                    case DISABLE -> "false";
+                    default -> null;
+                };
+        if (value != null) {
+            adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, value);
         }
     }
 
