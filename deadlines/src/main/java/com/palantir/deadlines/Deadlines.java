@@ -231,7 +231,7 @@ public final class Deadlines {
             Enforcement enforcementStrategy) {
         String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         return switch (enforcementStrategy) {
-            case DISABLE -> headerDeadlineSet ? Enforcement.DISABLE : Enforcement.DEFER;
+            case DISABLE -> Enforcement.DISABLE;
             case ENFORCE -> {
                 // If the header deadline is not set, set the enforcement header to the provided enforcement strategy
                 // irrespective of the existing enforcement header.
@@ -293,22 +293,23 @@ public final class Deadlines {
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
         Enforcement stateEnforcement =
                 resolveEnforcementStrategy(request, adapter, headerDeadline != null, enforcementStrategy);
-        if (headerDeadline != null && internalDeadline.isEmpty()) {
-            // use the deadline parsed from a header, which is considered external
-            storeDeadline(headerDeadline, false, stateEnforcement);
-        } else if (headerDeadline == null && internalDeadline.isPresent()) {
-            // use the deadline provided to this method, which is considered internal
-            storeDeadline(internalDeadline.get().toNanos(), true, stateEnforcement);
-        } else if (headerDeadline != null) {
-            // both present, so use the one that's lower
-            long internalDeadlineValue = internalDeadline.get().toNanos();
-            if (headerDeadline <= internalDeadlineValue) {
+        // use the deadline provided to this method, which is considered internal
+        if (headerDeadline != null) {
+            if (internalDeadline.isEmpty()) {
+                // use the deadline parsed from a header, which is considered external
                 storeDeadline(headerDeadline, false, stateEnforcement);
             } else {
-                storeDeadline(internalDeadlineValue, true, stateEnforcement);
+                // both present, so use the one that's lower
+                long internalDeadlineValue = internalDeadline.get().toNanos();
+                if (headerDeadline <= internalDeadlineValue) {
+                    storeDeadline(headerDeadline, false, stateEnforcement);
+                } else {
+                    storeDeadline(internalDeadlineValue, true, stateEnforcement);
+                }
             }
+        } else if (internalDeadline.isPresent()) {
+            storeDeadline(internalDeadline.get().toNanos(), true, stateEnforcement);
         }
-
         // no-op if neither header is present nor optional internalDeadline is present
     }
 
