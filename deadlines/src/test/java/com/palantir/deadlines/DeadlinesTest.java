@@ -440,6 +440,39 @@ class DeadlinesTest {
     }
 
     @Test
+    public void disable_propagation_does_not_enforce_deadline_expiration() {
+        // ensures that a call to disableFurtherDeadlinePropagation means that future calls to encodeToRequest
+        // do not enforce deadline expiration even if they originally would have
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            clock.elapsed += 500_000_000;
+
+            Map<String, String> outbound1 = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+
+            assertThat(outbound1).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            // now expired
+            clock.elapsed += 1_000_000_000;
+
+            Map<String, String> outbound2 = new HashMap<>();
+            // should not throw
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
+
+            assertThat(outbound2).isEmpty();
+        }
+    }
+
+    @Test
     public void multihop_expired_received_deadline_marks_propagate_already_expired_meter() {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
