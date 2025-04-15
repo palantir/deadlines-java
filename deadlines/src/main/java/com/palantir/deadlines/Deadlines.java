@@ -231,13 +231,11 @@ public final class Deadlines {
             Enforcement enforcementStrategy) {
         String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         return switch (enforcementStrategy) {
-            case DISABLE -> {
-                if (headerDeadline != null) {
-                    yield Enforcement.DISABLE;
-                }
-                yield Enforcement.DEFER;
-            }
+            case DISABLE -> headerDeadline != null ? Enforcement.DISABLE : Enforcement.DEFER;
             case ENFORCE -> {
+                if (headerDeadline == null) {
+                    yield Enforcement.ENFORCE;
+                }
                 // Deadlines will be enforced unless the header explicitly disables it.
                 if (headerEnforced != null && headerEnforced.equalsIgnoreCase("false")) {
                     yield Enforcement.DISABLE;
