@@ -42,6 +42,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+    private static final TraceLocal<ExpirationObservation> firstExpiration = TraceLocal.of();
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
@@ -70,6 +71,43 @@ public final class Deadlines {
         }
         long remaining = stateDeadline.remainingNanos(getClockNanoTime());
         return Optional.of(remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining));
+    }
+
+    /**
+     * Contains data about the circumstances of a deadline expiration.
+     *
+     * @param cause the cause of the expiration when it happened, e.g. "external" or "internal"
+     * @param intent the intent on how the expiration will be propagated, e.g. "propagate", "ignore", etc.
+     */
+    public record ExpirationObservation(String cause, String intent) {}
+
+    /**
+     * Contains data about the current deadline state.
+     *
+     * @param remainingDeadline the amount of time remaining towards the deadline; may be zero (or negative) if the
+     * deadline has expired.
+     * @param expired details about the first expiration, if the deadline has expired; will be empty otherwise
+     */
+    public record DeadlineObservation(Duration remainingDeadline, Optional<ExpirationObservation> expired) {}
+
+    /**
+     * Similar to {@link #getRemainingDeadline()} but allows an observer to see details on the cause of expiration.
+     *
+     * This method is slightly different from {@link #getRemainingDeadline()}, as it allows callers to both observe
+     * how much time is remaining towards the deadline, and see details of how a deadline expiration came about
+     * and how it was handled if such an expiration happened.
+     *
+     * @return a {@link DeadlineObservation} containing details of the amount of time remaining towards the deadline,
+     * as well as details of the expiration if it has already expired. If no deadline state is available for the current
+     * trace, an {@link Optional#empty()} is returned instead.
+     */
+    public static Optional<DeadlineObservation> observeRemainingDeadline() {
+        Optional<Duration> remainingDeadline = getRemainingDeadline();
+        if (remainingDeadline.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<ExpirationObservation> expired = Optional.ofNullable(firstExpiration.get());
+        return Optional.of(new DeadlineObservation(remainingDeadline.get(), expired));
     }
 
     /**
@@ -347,6 +385,12 @@ public final class Deadlines {
                 intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
             }
             metrics.expired().cause(cause).intent(intent).build().mark();
+
+            // check and store data about the first observed expiration
+            if (firstExpiration.get() == null) {
+                firstExpiration.set(new ExpirationObservation(cause.toString(), intent.toString()));
+            }
+
             if (enforced) {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
             }
