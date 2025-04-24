@@ -20,16 +20,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.codahale.metrics.Meter;
-import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
-import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
 import com.palantir.tracing.DetachedSpan;
-import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -335,23 +331,15 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter externalMeter = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            Meter internalMeter = metrics.expired()
-                    .cause(Expired_Cause.INTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            long originalExternalValue = externalMeter.getCount();
-            long originalInternalValue = internalMeter.getCount();
+            ExpirationObservation start = ExpirationObservation.start();
 
             Map<String, String> outbound = new HashMap<>();
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
 
-            assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
-            assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
+            ExpirationObservation end = start.observeFrom();
+
+            assertThat(end.nExternalPropagate()).isGreaterThan(0);
+            assertThat(end.nInternalPropagate()).isEqualTo(0);
         }
     }
 
@@ -371,23 +359,15 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter externalMeter = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            Meter internalMeter = metrics.expired()
-                    .cause(Expired_Cause.INTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            long originalExternalValue = externalMeter.getCount();
-            long originalInternalValue = internalMeter.getCount();
+            ExpirationObservation start = ExpirationObservation.start();
 
             Map<String, String> outbound = new HashMap<>();
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
 
-            assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
-            assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
+            ExpirationObservation end = start.observeFrom();
+
+            assertThat(end.nInternalPropagate()).isGreaterThan(0);
+            assertThat(end.nExternalPropagate()).isEqualTo(0);
         }
     }
 
@@ -407,26 +387,16 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter externalMeterWillPropagate = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            Meter externalMeterWontPropagate = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.IGNORE)
-                    .build();
-            long originalWillPropagateValue = externalMeterWillPropagate.getCount();
-            long originalWontPropagateValue = externalMeterWontPropagate.getCount();
+            ExpirationObservation start = ExpirationObservation.start();
 
             // first request is allowed to propagate the deadline, make sure the correct meter is marked
             Map<String, String> outbound1 = new HashMap<>();
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
-            assertThat(externalMeterWillPropagate.getCount()).isGreaterThan(originalWillPropagateValue);
-            assertThat(externalMeterWontPropagate.getCount()).isEqualTo(originalWontPropagateValue);
 
-            originalWillPropagateValue = externalMeterWillPropagate.getCount();
-            originalWontPropagateValue = externalMeterWontPropagate.getCount();
+            ExpirationObservation obs1 = start.observeFrom();
+
+            assertThat(obs1.nExternalPropagate()).isGreaterThan(0);
+            assertThat(obs1.nExternalIgnore()).isEqualTo(0);
 
             // and now disable propagation
             Deadlines.disableFurtherDeadlinePropagation();
@@ -434,8 +404,11 @@ class DeadlinesTest {
             // second request is not allowed to propagate the deadline, make sure the correct meter is marked
             Map<String, String> outbound2 = new HashMap<>();
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
-            assertThat(externalMeterWontPropagate.getCount()).isGreaterThan(originalWontPropagateValue);
-            assertThat(externalMeterWillPropagate.getCount()).isEqualTo(originalWillPropagateValue);
+
+            ExpirationObservation obs2 = obs1.observeFrom();
+
+            assertThat(obs2.nExternalIgnore()).isGreaterThan(0);
+            assertThat(obs2.nExternalPropagate()).isEqualTo(0);
         }
     }
 
@@ -481,18 +454,7 @@ class DeadlinesTest {
         DetachedSpan server2Span = DetachedSpan.start("server2");
 
         try (CloseableSpan ignored = server1Span.attach()) {
-            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter expiredMeterPropagateIntent = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.PROPAGATE)
-                    .build();
-            Meter expiredMeterPropagateAlreadyExpiredIntent = metrics.expired()
-                    .cause(Expired_Cause.EXTERNAL)
-                    .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
-                    .build();
-
-            long expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
-            long expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
+            ExpirationObservation start = ExpirationObservation.start();
 
             // the first hop receives a valid, non-zero deadline on the wire
             Map<String, String> request = new HashMap<>();
@@ -500,10 +462,12 @@ class DeadlinesTest {
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
             // nothing yet...
-            assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
-            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
-                    .isEqualTo(expiredMeterPropagateAlreadyExpiredIntentValue);
+            ExpirationObservation obs1 = start.observeFrom();
+
+            assertThat(obs1.nExternalPropagate()).isEqualTo(0);
+            assertThat(obs1.nExternalPropagateAlreadyExpired()).isEqualTo(0);
 
             // force expiration within the first hop
             clock.elapsed += 2_000_000;
@@ -515,23 +479,25 @@ class DeadlinesTest {
             assertThat(outbound1.get(DeadlinesHttpHeaders.EXPECT_WITHIN))
                     .isNotNull()
                     .isEqualTo("0");
-            assertThat(expiredMeterPropagateIntent.getCount()).isGreaterThan(expiredMeterPropagateIntentValue);
-            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount()).isZero();
+
+            ExpirationObservation obs2 = obs1.observeFrom();
+
+            assertThat(obs2.nExternalPropagate()).isGreaterThan(0);
+            assertThat(obs2.nExternalPropagateAlreadyExpired()).isEqualTo(0);
 
             // next hop parses a zero deadline
             try (CloseableSpan ignored2 = server2Span.attach()) {
-                expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
                 Deadlines.parseFromRequest(
                         Optional.empty(), outbound1, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
                 // sending another request when the deadline has already expired should
                 // mark the meter with the "propagate-already-expired" intent
-                expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
                 Map<String, String> outbound2 = new HashMap<>();
                 Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
-                assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
-                        .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
-                // meter with the "propagate" intent is unchanged
-                assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
+
+                ExpirationObservation obs3 = obs2.observeFrom();
+
+                assertThat(obs3.nExternalPropagateAlreadyExpired()).isGreaterThan(0);
+                assertThat(obs3.nExternalPropagate()).isEqualTo(0);
             }
         }
     }
