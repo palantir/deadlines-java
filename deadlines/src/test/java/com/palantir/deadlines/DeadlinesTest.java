@@ -180,6 +180,8 @@ class DeadlinesTest {
     @Test
     public void can_encode_to_request() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.initializeForCurrentTrace();
+
             Map<String, String> request = new HashMap<>();
             Duration deadline = Duration.ofSeconds(1);
             Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE);
@@ -189,6 +191,16 @@ class DeadlinesTest {
                         String expected = Deadlines.durationToHeaderValue(deadline.toNanos());
                         assertThat(s).isEqualTo(expected);
                     });
+        }
+    }
+
+    @Test
+    public void does_not_encode_to_request_when_not_initialized_first() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration deadline = Duration.ofSeconds(1);
+            Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE);
+            assertThat(request).isEmpty();
         }
     }
 

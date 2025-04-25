@@ -42,11 +42,33 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+    private static final TraceLocal<Boolean> isInitializedForTrace = TraceLocal.of();
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
 
     private static Clock clock = System::nanoTime;
+
+    /**
+     * Initialize deadline handling for the current trace.
+     *
+     * This method should be called at least once to allow future calls to {@link #encodeToRequest} to encode a
+     * deadline value on outbound requests.
+     *
+     * Note that {@link #parseFromRequest} may implicitly initialize deadline handling for the current trace if it is
+     * called with a present value for an internal deadline, or if it parses a deadline from a request header to set
+     * the deadline state.
+     *
+     * If {@link #encodeToRequest} is called without calling either this method or {@link #parseFromRequest} first, then
+     * it is assumed that deadlines are not enabled for this trace and encoding will result in a no-op.
+     */
+    public static void initializeForCurrentTrace() {
+        Boolean alreadyInitialized = isInitializedForTrace.get();
+        if (alreadyInitialized != null && alreadyInitialized) {
+            return;
+        }
+        isInitializedForTrace.set(true);
+    }
 
     /**
      * Get the amount of time remaining for the current deadline.
@@ -100,6 +122,10 @@ public final class Deadlines {
     /**
      * Encode a deadline into a request header.
      *
+     * This method only encodes a deadline if a call was previously made to {@link #initializeForCurrentTrace}, or if
+     * a previous call to {@link #parseFromRequest} successfully populated the deadline state for this trace. Otherwise
+     * it is a no-op.
+     *
      * The actual deadline value encoded will be the minimum of:
      *   - the providedDeadline parameter
      *   - the value returned by {@link #getRemainingDeadline()}} if it exists
@@ -115,6 +141,12 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+        // no-op if deadlines have not been initialized for this trace
+        Boolean isInitialized = isInitializedForTrace.get();
+        if (isInitialized == null || !isInitialized) {
+            return;
+        }
+
         ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
@@ -333,6 +365,9 @@ public final class Deadlines {
         ProvidedDeadline providedDeadline =
                 new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement);
         deadlineState.set(providedDeadline);
+        // ensure the current trace is now marked as having been initialized for deadline handling, even if
+        // initializeForCurrentTrace() was never called before
+        initializeForCurrentTrace();
     }
 
     private static void checkExpiration(
