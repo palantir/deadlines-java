@@ -46,6 +46,7 @@ public final class Deadlines {
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
 
+    @SuppressWarnings("for-rollout:NonFinalStaticField")
     private static Clock clock = System::nanoTime;
 
     /**

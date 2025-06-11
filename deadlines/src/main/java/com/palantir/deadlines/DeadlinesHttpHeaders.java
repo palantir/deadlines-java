@@ -24,6 +24,7 @@ package com.palantir.deadlines;
  * and {@link Deadlines#parseFromRequest} with a supplied {@link Deadlines.RequestEncodingAdapter} to encode
  * or decode header values from an HTTP request implementation type.
  */
+@SuppressWarnings("for-rollout:InterfaceWithOnlyStatics")
 public interface DeadlinesHttpHeaders {
     /**
      * Expect-Within is a client-provided deadline value, specified in decimal number of seconds.
