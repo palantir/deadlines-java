@@ -35,6 +35,7 @@ public final class DeadlineExpiredReasons {
         }
     }
 
+    @SuppressWarnings("for-rollout:AnnotationPosition")
     public static <T> @Nullable DeadlineExpiredException maybeParseFromResponse(
             T response, ResponseDecodingAdapter<T> adapter) {
         String reason = adapter.maybeFirstHeader(response, DeadlinesHttpHeaders.DEADLINE_EXPIRED_REASON);
