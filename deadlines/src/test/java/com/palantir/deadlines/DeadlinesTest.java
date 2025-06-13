@@ -843,7 +843,6 @@ class DeadlinesTest {
             throw new IllegalStateException("not implemented");
         }
 
-        @SuppressWarnings("for-rollout:AnnotationPosition")
         @Override
         public @Nullable String maybeFirstHeader(Map<String, String> headers, String headerName) {
             return headers.get(headerName);
