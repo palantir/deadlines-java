@@ -18,7 +18,6 @@ buildscript {
         classpath 'com.palantir.gradle.gitversion:gradle-git-version:3.3.0'
         classpath 'com.palantir.gradle.idea-configuration:gradle-idea-configuration:0.4.0'
         classpath 'com.palantir.metricschema:gradle-metric-schema:0.33.0'
-        classpath 'gradle.plugin.org.inferred:gradle-processors:3.7.0'
     }
 }
 
@@ -45,7 +44,6 @@ allprojects {
 
     apply plugin: 'com.palantir.java-format'
     apply plugin: 'com.palantir.baseline-null-away'
-    apply plugin: 'org.inferred.processors'
     apply plugin: 'com.palantir.jakarta-package-alignment'
 
     group 'com.palantir.deadlines'
