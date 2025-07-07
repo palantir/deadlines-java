@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
+import com.palantir.deadlines.Deadlines.DeadlineObservation;
 import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
@@ -316,6 +317,77 @@ class DeadlinesTest {
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+        }
+    }
+
+    @Test
+    public void test_observe_remaining_deadline_not_expired() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+
+            Optional<DeadlineObservation> remaining = Deadlines.observeRemainingDeadline();
+            assertThat(remaining).isPresent();
+            assertThat(remaining.get().remainingDeadline()).isEqualTo(providedDeadline);
+            assertThat(remaining.get().expired()).isEmpty();
+        }
+    }
+
+    @Test
+    public void test_observe_remaining_deadline_expired() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            clock.elapsed += 2_000_000;
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+
+            Optional<DeadlineObservation> remaining = Deadlines.observeRemainingDeadline();
+            assertThat(remaining).isPresent();
+            assertThat(remaining.get().remainingDeadline()).isLessThanOrEqualTo(Duration.ZERO);
+            assertThat(remaining.get().expired()).hasValueSatisfying(exp -> {
+                assertThat(exp.cause()).isEqualTo(Expired_Cause.EXTERNAL.toString());
+                assertThat(exp.intent()).isEqualTo(Expired_Intent.PROPAGATE.toString());
+            });
+        }
+    }
+
+    @Test
+    public void test_observe_remaining_deadline_no_deadline_state() {
+        Optional<DeadlineObservation> remaining = Deadlines.observeRemainingDeadline();
+        assertThat(remaining).isEmpty();
+
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            remaining = Deadlines.observeRemainingDeadline();
+            assertThat(remaining).hasValue(new DeadlineObservation(providedDeadline, Optional.empty()));
+
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            remaining = Deadlines.observeRemainingDeadline();
+            assertThat(remaining).isEmpty();
         }
     }
 
