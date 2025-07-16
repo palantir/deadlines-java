@@ -42,6 +42,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+    private static final ThreadLocal<Boolean> disableEnforcement = ThreadLocal.withInitial(() -> false);
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
     private static final CharMatcher decimalMatcher =
             CharMatcher.inRange('0', '9').or(CharMatcher.is('.')).precomputed();
@@ -61,6 +62,10 @@ public final class Deadlines {
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
+        if (disableEnforcement.get()) {
+            return Optional.empty();
+        }
+
         ProvidedDeadline stateDeadline = deadlineState.get();
         if (stateDeadline == null) {
             return Optional.empty();
@@ -98,6 +103,24 @@ public final class Deadlines {
     }
 
     /**
+     * Disables enforcement and propagation of deadline values for the current thread.
+     *
+     * This is intended for asynchronous work spun out of a request that is part of the same request trace for
+     * debuggability purposes, but should not be subject to deadlines enforcement.
+     *
+     * Further calls to {@link #encodeToRequest} will result in a no-op.
+     *
+     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
+     */
+    public static void disableDeadlineEnforcementForCurrentThread() {
+        disableEnforcement.set(true);
+    }
+
+    public static void resetDeadlineEnforcementForCurrentThread() {
+        disableEnforcement.remove();
+    }
+
+    /**
      * Encode a deadline into a request header.
      *
      * The actual deadline value encoded will be the minimum of:
@@ -115,6 +138,10 @@ public final class Deadlines {
      */
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+        if (disableEnforcement.get()) {
+            return;
+        }
+
         ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
