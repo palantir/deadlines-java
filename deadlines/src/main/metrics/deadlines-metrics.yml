@@ -22,6 +22,9 @@ namespaces:
             docs: Describes the intent (or not) to propagate an expired deadline on
                  further RPC calls.
             values:
+              - value: throw
+                docs: Enforcement was enabled for this trace at the time the deadline
+                      expiration was reached, and an exception was thrown.
               - value: propagate
                 docs: Deadline propagation was enabled for this trace at the time
                       the deadline expiration was reached. This means that further
