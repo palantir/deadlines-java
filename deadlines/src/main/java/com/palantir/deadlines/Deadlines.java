@@ -340,13 +340,23 @@ public final class Deadlines {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
-            Expired_Intent intent = enforced ? Expired_Intent.THROW : Expired_Intent.PROPAGATE;
-            if (disablePropagation) {
-                intent = Expired_Intent.IGNORE;
-            } else if (alreadyExpired) {
-                intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
+            Expired_Intent intent;
+            if (enforced) {
+                // intent is always "throw" if enforced = true, regardless of what the other flags are
+                intent = Expired_Intent.THROW;
+            } else {
+                // will not throw, report one of the other intents
+                if (disablePropagation) {
+                    intent = Expired_Intent.IGNORE;
+                } else if (alreadyExpired) {
+                    intent = Expired_Intent.PROPAGATE_ALREADY_EXPIRED;
+                } else {
+                    intent = Expired_Intent.PROPAGATE;
+                }
             }
+
             metrics.expired().cause(cause).intent(intent).build().mark();
+
             if (enforced) {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
             }
