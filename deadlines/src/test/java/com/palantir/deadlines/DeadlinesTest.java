@@ -537,6 +537,35 @@ class DeadlinesTest {
     }
 
     @Test
+    public void test_enforced_deadline_expiration_reports_throw_intent_metric() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(1);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            clock.elapsed += 2_000_000;
+
+            // additionally validate that the expired deadline meter is marked with the "THROW" intent
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter externalMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.THROW)
+                    .build();
+            long originalExternalValue = externalMeter.getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            assertThatThrownBy(() ->
+                            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+            assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
+        }
+    }
+
+    @Test
     public void test_external_deadline_expiration_is_enforced_by_internal_flag() {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);

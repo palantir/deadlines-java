@@ -1,0 +1,5 @@
+type: improvement
+improvement:
+  description: deadline.expired metric reports a "throw" intent
+  links:
+  - https://github.com/palantir/deadlines-java/pull/162
