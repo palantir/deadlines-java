@@ -36,7 +36,7 @@ com.palantir.tritium:tritium-metrics:0.104.0 (1 constraints: 67059440)
 
 com.palantir.tritium:tritium-registry:0.104.0 (2 constraints: d31500f1)
 
-io.dropwizard.metrics:metrics-core:4.2.34 (3 constraints: 47261678)
+io.dropwizard.metrics:metrics-core:4.2.35 (3 constraints: 48267478)
 
 org.hdrhistogram:HdrHistogram:2.2.2 (1 constraints: 0e100092)
 
