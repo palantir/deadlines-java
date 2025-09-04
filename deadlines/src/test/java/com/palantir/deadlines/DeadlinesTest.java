@@ -182,7 +182,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration deadline = Duration.ofSeconds(1);
-            Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(deadline, request, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(Optional.ofNullable(request.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(s -> {
@@ -220,7 +220,8 @@ class DeadlinesTest {
 
             Map<String, String> outboundRequest = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(2);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
@@ -245,7 +246,8 @@ class DeadlinesTest {
 
             Map<String, String> outboundRequest = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
@@ -272,7 +274,8 @@ class DeadlinesTest {
 
             Map<String, String> outboundRequest = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            Deadlines.encodeToRequest(providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    providedDeadline, outboundRequest, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             // even with a provided deadline lower than the one from state, disabling propagation should prevent
             // further encoding of headers
@@ -348,7 +351,8 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
             assertThat(internalMeter.getCount()).isEqualTo(originalInternalValue);
@@ -384,7 +388,8 @@ class DeadlinesTest {
             long originalInternalValue = internalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(internalMeter.getCount()).isGreaterThan(originalInternalValue);
             assertThat(externalMeter.getCount()).isEqualTo(originalExternalValue);
@@ -421,7 +426,8 @@ class DeadlinesTest {
 
             // first request is allowed to propagate the deadline, make sure the correct meter is marked
             Map<String, String> outbound1 = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
             assertThat(externalMeterWillPropagate.getCount()).isGreaterThan(originalWillPropagateValue);
             assertThat(externalMeterWontPropagate.getCount()).isEqualTo(originalWontPropagateValue);
 
@@ -433,7 +439,8 @@ class DeadlinesTest {
 
             // second request is not allowed to propagate the deadline, make sure the correct meter is marked
             Map<String, String> outbound2 = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
             assertThat(externalMeterWontPropagate.getCount()).isGreaterThan(originalWontPropagateValue);
             assertThat(externalMeterWillPropagate.getCount()).isEqualTo(originalWillPropagateValue);
         }
@@ -455,7 +462,8 @@ class DeadlinesTest {
             clock.elapsed += 500_000_000;
 
             Map<String, String> outbound1 = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound1).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
 
@@ -466,7 +474,8 @@ class DeadlinesTest {
 
             Map<String, String> outbound2 = new HashMap<>();
             // should not throw
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound2).isEmpty();
         }
@@ -509,7 +518,8 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Map<String, String> outbound1 = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             // this hop marks the meter with the "propagate" intent, as the expiration happened here
             assertThat(outbound1.get(DeadlinesHttpHeaders.EXPECT_WITHIN))
@@ -527,7 +537,8 @@ class DeadlinesTest {
                 // mark the meter with the "propagate-already-expired" intent
                 expiredMeterPropagateAlreadyExpiredIntentValue = expiredMeterPropagateAlreadyExpiredIntent.getCount();
                 Map<String, String> outbound2 = new HashMap<>();
-                Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE);
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
                 assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
                         .isGreaterThan(expiredMeterPropagateAlreadyExpiredIntentValue);
                 // meter with the "propagate" intent is unchanged
@@ -558,8 +569,8 @@ class DeadlinesTest {
             long originalExternalValue = externalMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
-            assertThatThrownBy(() ->
-                            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE))
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
                     .isInstanceOf(DeadlineExpiredException.External.class);
             assertThat(externalMeter.getCount()).isGreaterThan(originalExternalValue);
         }
@@ -579,8 +590,8 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Map<String, String> outbound = new HashMap<>();
-            assertThatThrownBy(() ->
-                            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE))
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
                     .isInstanceOf(DeadlineExpiredException.External.class);
         }
     }
@@ -600,8 +611,8 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Map<String, String> outbound = new HashMap<>();
-            assertThatThrownBy(() ->
-                            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE))
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
                     .isInstanceOf(DeadlineExpiredException.External.class);
         }
     }
@@ -621,7 +632,7 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN, "0");
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
@@ -645,7 +656,8 @@ class DeadlinesTest {
             clock.elapsed += 500_000_000;
 
             Map<String, String> outbound1 = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound1, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
             assertThat(outbound1).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
 
             try (CloseableSpan ignored2 = server2Span.attach()) {
@@ -656,7 +668,7 @@ class DeadlinesTest {
 
                 Map<String, String> outbound2 = new HashMap<>();
                 assertThatThrownBy(() -> Deadlines.encodeToRequest(
-                                Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE))
+                                Duration.ofSeconds(10), outbound2, DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
                         .isInstanceOf(DeadlineExpiredException.External.class);
             }
         }
@@ -673,7 +685,8 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         }
@@ -690,7 +703,8 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
         }
@@ -708,7 +722,8 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
         }
@@ -726,7 +741,8 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
@@ -744,7 +760,8 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
@@ -760,7 +777,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
         }
@@ -776,7 +794,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         }
@@ -792,7 +811,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
@@ -811,7 +831,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
         }
@@ -830,7 +851,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
         }
@@ -849,7 +871,8 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             Map<String, String> outbound = new HashMap<>();
-            Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
         }
