@@ -121,8 +121,6 @@ public final class Deadlines {
         if (stateDeadline == null) {
             // use proposedDeadline
             checkExpiration(proposedDeadlineNanos, false, false, false, enforcement == Enforcement.ENFORCE);
-
-            storeDeadline(proposedDeadlineNanos, false, enforcement);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
             encodeEnforcement(request, adapter, enforcement);
@@ -130,7 +128,6 @@ public final class Deadlines {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
             Enforcement resolvedEnforcement = resolveEnforcementStrategy(stateDeadline.enforcement(), enforcement);
-            // TODO(kkak): If resolvedEnforcement =/= stateDeadline.enforcement(), should we store it?
             boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
