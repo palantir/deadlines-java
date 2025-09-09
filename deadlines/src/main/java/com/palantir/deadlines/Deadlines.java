@@ -225,6 +225,17 @@ public final class Deadlines {
                 getEnforcementFromHeaders(headerEnforced, headerDeadlineSet), enforcementStrategy);
     }
 
+    private static Enforcement resolveEnforcementStrategy(
+            Enforcement serviceDesiredEnforcement, Enforcement clientDesiredEnforcement) {
+        if (serviceDesiredEnforcement == Enforcement.DISABLE || clientDesiredEnforcement == Enforcement.DISABLE) {
+            return Enforcement.DISABLE;
+        }
+        if (serviceDesiredEnforcement == Enforcement.ENFORCE || clientDesiredEnforcement == Enforcement.ENFORCE) {
+            return Enforcement.ENFORCE;
+        }
+        return Enforcement.DEFER;
+    }
+
     private static Enforcement getEnforcementFromHeaders(@Nullable String headerEnforced, boolean headerDeadlineSet) {
         if (!headerDeadlineSet || headerEnforced == null) {
             return Enforcement.DEFER;
@@ -237,17 +248,6 @@ public final class Deadlines {
         } else {
             return Enforcement.DEFER;
         }
-    }
-
-    private static Enforcement resolveEnforcementStrategy(
-            Enforcement serviceDesiredEnforcement, Enforcement clientDesiredEnforcement) {
-        if (serviceDesiredEnforcement == Enforcement.DISABLE || clientDesiredEnforcement == Enforcement.DISABLE) {
-            return Enforcement.DISABLE;
-        }
-        if (serviceDesiredEnforcement == Enforcement.ENFORCE || clientDesiredEnforcement == Enforcement.ENFORCE) {
-            return Enforcement.ENFORCE;
-        }
-        return Enforcement.DEFER;
     }
 
     /**
