@@ -50,11 +50,11 @@ public final class Deadlines {
 
     /**
      * Get the amount of time remaining for the current deadline.
-     *
+     * <p>
      * Queries the current deadline state from a TraceLocal, and returns a {@link Duration} for the
      * amount of time remaining towards that deadline. If the deadline has already expired, then
      * {@link Duration#ZERO} is returned.
-     *
+     * <p>
      * If no deadline state has been set for the current trace, return an empty Optional.
      *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
@@ -74,13 +74,13 @@ public final class Deadlines {
 
     /**
      * Disables propagation of deadline values any further for the current trace.
-     *
+     * <p>
      * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
      * further operations should not be subject to deadline enforcement.
-     *
+     * <p>
      * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
      * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
-     *
+     * <p>
      * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
      */
     public static void disableFurtherDeadlinePropagation() {
@@ -99,14 +99,20 @@ public final class Deadlines {
 
     /**
      * Encode a deadline into a request header.
-     *
+     * <p>
      * The actual deadline value encoded will be the minimum of:
      *   - the providedDeadline parameter
      *   - the value returned by {@link #getRemainingDeadline()}} if it exists
      * This ensures that the deadline set for the request will be based on the remaining deadline from
      * already-set internal state, or a smaller one if the caller chooses that.
-     *
-     * This function has no side-effects on the internal deadline state stored in a TraceLocal.
+     * <p>
+     * This function has no side effects on the internal deadline state stored in a TraceLocal.
+     * <p>
+     * The client requested enforcement strategy will be resolved against the internal state in the following manner:
+     *   - If either client or internal state requests {@link Enforcement#DISABLE}, then the deadline is not enforced.
+     *   - Then, if either client or internal state requests {@link Enforcement#ENFORCE}, then the deadline is enforced.
+     *   - Finally, if both the client and internal state requests {@link Enforcement#DEFER}, the deadline is not
+     *     enforced and a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is not encoded on the new request.
      *
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum of
      * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
@@ -160,6 +166,14 @@ public final class Deadlines {
         }
     }
 
+    /**
+     * @deprecated Use {@link #encodeToRequest(Duration, T, RequestEncodingAdapter, Enforcement)} instead
+     */
+    public static <T> void encodeToRequest(
+            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+        encodeToRequest(proposedDeadline, request, adapter, Enforcement.DEFER);
+    }
+
     private static <T> void encodeEnforcement(
             T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
         String headerValue =
@@ -175,7 +189,7 @@ public final class Deadlines {
 
     /**
      * Selects the enforcement strategy when parsing a deadline value from a request.
-     *
+     * <p>
      * Enforcement controls whether this node should enforce expirations when they happen in a future call
      * to {@link #encodeToRequest} for the current trace. Enabling enforcement means that a {@link DeadlineExpiredException}
      * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
@@ -187,7 +201,7 @@ public final class Deadlines {
          * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
          * to "true" when encoding future deadlines from the current trace to request enforcement from downstream
          * nodes as well.
-         *
+         * <p>
          * Note that calls to {@link #parseFromRequest} that receive an explicit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
          * header with a value set to "false" will still override this to disable enforcement. This is intentional
          * to allow upstream nodes to short-circuit deadline enforcement if necessary.
@@ -200,7 +214,7 @@ public final class Deadlines {
          * a request header (e.g. if {@link #parseFromRequest} received an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
          * header set to "true"). Otherwise, no deadline expiration enforcement will happen at this node, and we will
          * omit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} headers on future outbound requests.
-         *
+         * <p>
          * DEFER is used to indicate that we are deferring the enforcement strategy to either the inbound request,
          * or the next downstream hop, but will not enable enforcement here.
          */
@@ -252,22 +266,26 @@ public final class Deadlines {
 
     /**
      * Parse a deadline value from a request header and set the deadline state for the current trace.
-     *
+     * <p>
      * If the request object contains a deadline value in a header, this method will parse it and store
      * the deadline value state internally in a TraceLocal, making it available to future calls to
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
-     *
+     * <p>
      * Enforcement of the deadline is controlled in the following way:
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DISABLE}, then it is not enforced.
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DEFER}, then the deadline is enforced
-     *     only if a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "true"
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#ENFORCE}, then the deadline is enforced
      *   - If a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "false", then
-     *     the deadline is not enforced and the the value of "enforcementStrategy" is ignored
-     *
-     * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
-     * set (or overwritten) based on the value of the deadline parsed from request headers.
+     *     the deadline is not enforced and the value of "enforcementStrategy" is ignored
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DISABLE}, then it is not enforced.
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#ENFORCE}, then the deadline state is
+     *     set to {@link Enforcement#ENFORCE}
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DEFER}, then the deadline state is set to
+     *     {@link Enforcement#ENFORCE} only if a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed
+     *     with a value of "true"
+     * <p>
+     * This function has side effects on the internal deadline state stored in a TraceLocal; the state is
+     * set (or overwritten) based on the value of the deadline parsed from request headers. This state may eventually
+     * be resolved against a client-provided enforcement strategy if an outbound request is made, for details on
+     * resolution strategy, see {@link #encodeToRequest(Duration, T, RequestEncodingAdapter, Enforcement)}
      *
      * @param internalDeadline if present, represents an alternative deadline that should be used if it is
      * lower than the one parsed from a request header
