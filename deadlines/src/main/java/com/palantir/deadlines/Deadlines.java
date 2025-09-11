@@ -118,22 +118,27 @@ public final class Deadlines {
      * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
-     * @param enforcement a client requested {@link Enforcement} state, which will be resolved against any existing state
+     * @param clientEnforcement a client requested {@link Enforcement} state, which will be resolved against any
+     * existing state
      */
     public static <T> void encodeToRequest(
-            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
+            Duration proposedDeadline,
+            T request,
+            RequestEncodingAdapter<? super T> adapter,
+            Enforcement clientEnforcement) {
         ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(proposedDeadlineNanos, false, false, false, enforcement == Enforcement.ENFORCE);
+            checkExpiration(proposedDeadlineNanos, false, false, false, clientEnforcement == Enforcement.ENFORCE);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
-            encodeEnforcement(request, adapter, enforcement);
+            encodeEnforcement(request, adapter, clientEnforcement);
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
-            Enforcement resolvedEnforcement = resolveEnforcementStrategy(stateDeadline.enforcement(), enforcement);
+            Enforcement resolvedEnforcement =
+                    resolveEnforcementStrategy(stateDeadline.enforcement(), clientEnforcement);
             boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
@@ -297,7 +302,7 @@ public final class Deadlines {
             Optional<Duration> internalDeadline,
             T request,
             RequestDecodingAdapter<? super T> adapter,
-            Deadlines.Enforcement enforcementStrategy) {
+            Enforcement enforcementStrategy) {
         Long headerDeadline =
                 tryParseSecondsToNanoseconds(adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN));
         String headerEnforced = adapter.maybeFirstHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
