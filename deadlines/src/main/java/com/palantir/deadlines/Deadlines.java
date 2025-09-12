@@ -137,8 +137,7 @@ public final class Deadlines {
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
-            Enforcement resolvedEnforcement =
-                    resolveEnforcementStrategy(stateDeadline.enforcement(), clientEnforcement);
+            Enforcement resolvedEnforcement = stateDeadline.enforcement().resolveWith(clientEnforcement);
             boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
@@ -192,6 +191,15 @@ public final class Deadlines {
         }
     }
 
+    public interface ResolvableEnforcement {
+        /**
+         * Resolves two requested enforcement strategies against each other (client-requested, and internal deadline
+         * state based on inbound request headers/service configuration) to produce a resulting enforcement strategy
+         * which should be used when making outbound requests.
+         */
+        Enforcement resolveWith(Enforcement other);
+    }
+
     /**
      * Selects the enforcement strategy when parsing a deadline value from a request.
      * <p>
@@ -200,7 +208,7 @@ public final class Deadlines {
      * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
      * when encoding a deadline for a new outbound request.
      */
-    public enum Enforcement {
+    public enum Enforcement implements ResolvableEnforcement {
         /**
          * ENFORCE means that future calls to {@link #encodeToRequest} will throw an exception if the deadline has
          * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
@@ -211,7 +219,12 @@ public final class Deadlines {
          * header with a value set to "false" will still override this to disable enforcement. This is intentional
          * to allow upstream nodes to short-circuit deadline enforcement if necessary.
          */
-        ENFORCE,
+        ENFORCE {
+            @Override
+            public Enforcement resolveWith(Enforcement other) {
+                return other.equals(Enforcement.DISABLE) ? other : this;
+            }
+        },
 
         /**
          * DEFER means that future calls to {@link #encodeToRequest} MAY throw an exception if the deadline
@@ -223,7 +236,12 @@ public final class Deadlines {
          * DEFER is used to indicate that we are deferring the enforcement strategy to either the inbound request,
          * or the next downstream hop, but will not enable enforcement here.
          */
-        DEFER,
+        DEFER {
+            @Override
+            public Enforcement resolveWith(Enforcement other) {
+                return other;
+            }
+        },
 
         /**
          * DISABLE means that deadline expiration will be ignored at this node, and ALL downstream nodes, regardless
@@ -233,26 +251,19 @@ public final class Deadlines {
          * "false". This effectively terminates deadline enforcement at this node and causes downstream nodes to
          * ignore further enforcement for this trace, regardless of their configured enforcement state.
          */
-        DISABLE
+        DISABLE {
+            @Override
+            public Enforcement resolveWith(Enforcement other) {
+                return this;
+            }
+        }
     }
 
     private static Enforcement resolveEnforcementStrategy(
             @Nullable String headerEnforced, boolean headerDeadlineSet, Enforcement enforcementStrategy) {
         // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
         // accordingly
-        return resolveEnforcementStrategy(
-                getEnforcementFromHeaders(headerEnforced, headerDeadlineSet), enforcementStrategy);
-    }
-
-    private static Enforcement resolveEnforcementStrategy(
-            Enforcement serviceDesiredEnforcement, Enforcement clientDesiredEnforcement) {
-        if (serviceDesiredEnforcement == Enforcement.DISABLE || clientDesiredEnforcement == Enforcement.DISABLE) {
-            return Enforcement.DISABLE;
-        }
-        if (serviceDesiredEnforcement == Enforcement.ENFORCE || clientDesiredEnforcement == Enforcement.ENFORCE) {
-            return Enforcement.ENFORCE;
-        }
-        return Enforcement.DEFER;
+        return getEnforcementFromHeaders(headerEnforced, headerDeadlineSet).resolveWith(enforcementStrategy);
     }
 
     private static Enforcement getEnforcementFromHeaders(@Nullable String headerEnforced, boolean headerDeadlineSet) {
