@@ -18,6 +18,7 @@ package com.palantir.deadlines;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
@@ -929,6 +930,26 @@ class DeadlinesTest {
             // existing DISABLE strategy takes precedence over requested ENFORCE strategy
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED)))
                     .contains("false");
+        }
+    }
+
+    @Test
+    void encode_to_request_throws_on_expired_deadline_when_client_requests_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> inboundRequest = new HashMap<>();
+            inboundRequest.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(0).toNanos()));
+            Deadlines.parseFromRequest(
+                    Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            Optional<Duration> stateDeadline = Deadlines.getRemainingDeadline();
+            assertThat(stateDeadline).isPresent();
+
+            Map<String, String> outboundRequest = new HashMap<>();
+            assertThatExceptionOfType(DeadlineExpiredException.External.class)
+                    .isThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(2), outboundRequest, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE));
         }
     }
 

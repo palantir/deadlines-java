@@ -20,6 +20,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
+import com.google.errorprone.annotations.InlineMe;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
@@ -173,6 +174,10 @@ public final class Deadlines {
     /**
      * @deprecated Use {@link #encodeToRequest(Duration, T, RequestEncodingAdapter, Enforcement)} instead
      */
+    @Deprecated
+    @InlineMe(
+            replacement = "Deadlines.encodeToRequest(proposedDeadline, request, adapter, Enforcement.DEFER)",
+            imports = {"com.palantir.deadlines.Deadlines", "com.palantir.deadlines.Deadlines.Enforcement"})
     public static <T> void encodeToRequest(
             Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
         encodeToRequest(proposedDeadline, request, adapter, Enforcement.DEFER);
@@ -253,7 +258,7 @@ public final class Deadlines {
          */
         DISABLE {
             @Override
-            public Enforcement resolveWith(Enforcement other) {
+            public Enforcement resolveWith(Enforcement _other) {
                 return this;
             }
         }
