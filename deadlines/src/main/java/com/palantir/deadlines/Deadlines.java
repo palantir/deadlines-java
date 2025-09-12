@@ -172,7 +172,7 @@ public final class Deadlines {
     }
 
     /**
-     * @deprecated Use {@link #encodeToRequest(Duration, T, RequestEncodingAdapter, Enforcement)} instead
+     * @deprecated Use {@link #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)} instead
      */
     @Deprecated
     @InlineMe(
@@ -306,7 +306,7 @@ public final class Deadlines {
      * This function has side effects on the internal deadline state stored in a TraceLocal; the state is
      * set (or overwritten) based on the value of the deadline parsed from request headers. This state may eventually
      * be resolved against a client-provided enforcement strategy if an outbound request is made, for details on
-     * resolution strategy, see {@link #encodeToRequest(Duration, T, RequestEncodingAdapter, Enforcement)}
+     * resolution strategy, see {@link #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)}
      *
      * @param internalDeadline if present, represents an alternative deadline that should be used if it is
      * lower than the one parsed from a request header
