@@ -172,6 +172,7 @@ public final class Deadlines {
     }
 
     /**
+     * Encode a deadline into a request header.
      * @deprecated Use {@link #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)} instead
      */
     @Deprecated
