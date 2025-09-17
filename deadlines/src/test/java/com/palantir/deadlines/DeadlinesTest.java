@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
+import com.palantir.deadlines.Deadlines.DeadlineView;
 import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
@@ -857,6 +858,32 @@ class DeadlinesTest {
             Deadlines.encodeToRequest(Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE);
 
             assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+        }
+    }
+
+    @Test
+    public void test_observe_deadline_after_expiration() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofMillis(100);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofMillis(1)), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            clock.elapsed += 2_000_000;
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(Duration.ofSeconds(1), outbound, DummyRequestEncoder.INSTANCE);
+
+            Optional<DeadlineView> obs = Deadlines.observeRemainingDeadline();
+            assertThat(obs).hasValueSatisfying(view -> {
+                assertThat(view.remainingNanos()).isLessThan(0);
+                assertThat(view.propagationDisabled()).isFalse();
+                assertThat(view.numExpirations()).isEqualTo(1);
+            });
         }
     }
 

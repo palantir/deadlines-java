@@ -60,6 +60,8 @@ public final class Deadlines {
      *
      * If no deadline state has been set for the current trace, return an empty Optional.
      *
+     * If {@link #disableFurtherDeadlinePropagation} was called prior to calling this method, returns an empty Optional.
+     *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
@@ -73,6 +75,43 @@ public final class Deadlines {
         }
         long remaining = stateDeadline.remainingNanos(getClockNanoTime());
         return Optional.of(remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining));
+    }
+
+    public record DeadlineView(long remainingNanos, boolean propagationDisabled, long numExpirations) {}
+
+    /**
+     * Get a view of the current deadline state.
+     *
+     * A view includes the current time remaining (in nanoseconds) towards the deadline expiration, whether
+     * deadline propagation has been disabled, and the number of expiration events that have occurred since the
+     * deadline state was created.
+     *
+     * This differs from {@link #getRemainingDeadline()} in the following ways:
+     * - the amount of time remaining may be negative if the deadline has already expired, in which case it will be
+     *   the number of nanoseconds that have elapsed since the deadline expiration was hit
+     * - a flag is returned indicating whether {@link #disableFurtherDeadlinePropagation} has been called
+     * - it additionally returns the number of deadline expiration events that were reported since the deadline
+     *   state was created; this is useful for distinguishing between scenarios where the deadline expiration was
+     *   reached without any additional outbound requests being attempted, versus paths that attempted to send more
+     *   requests within the same trace and may have done so more than once past the deadline expiration.
+     *
+     * Returns an empty Optional if no deadline state exists.
+     *
+     * @return a {@link DeadlineView} with a view of the current deadline state, or {@link Optional#empty()} if no such
+     * deadline state exists.
+     */
+    public static Optional<DeadlineView> observeRemainingDeadline() {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null) {
+            return Optional.empty();
+        }
+        long remainingNanos = stateDeadline.remainingNanos(getClockNanoTime());
+        boolean propagationDisabled = stateDeadline.disablePropagation();
+        // count the number of deadline expirations that have fired since the deadline state was created
+        // useful for observability on codepaths that don't enable enforcement, in which case it's possible
+        // expirations will be reported multiple times
+        long numExpirations = countExpirations() - stateDeadline.numExpirations();
+        return Optional.of(new DeadlineView(remainingNanos, propagationDisabled, numExpirations));
     }
 
     /**
@@ -96,7 +135,8 @@ public final class Deadlines {
                     currentState.internal(),
                     true,
                     // set the enforcement to DEFER to avoid having checkExpiration throw
-                    Enforcement.DEFER));
+                    Enforcement.DEFER,
+                    currentState.numExpirations()));
         }
     }
 
@@ -334,7 +374,7 @@ public final class Deadlines {
 
     private static void storeDeadline(long deadline, boolean internal, Enforcement enforcement) {
         ProvidedDeadline providedDeadline =
-                new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement);
+                new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement, countExpirations());
         deadlineState.set(providedDeadline);
     }
 
@@ -364,6 +404,45 @@ public final class Deadlines {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
             }
         }
+    }
+
+    private static long countExpirations() {
+        long externalPropagate = metrics.expired()
+                .cause(Expired_Cause.EXTERNAL)
+                .intent(Expired_Intent.PROPAGATE)
+                .build()
+                .getCount();
+        long externalPropagateAlreadyExpired = metrics.expired()
+                .cause(Expired_Cause.EXTERNAL)
+                .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
+                .build()
+                .getCount();
+        long externalIgnore = metrics.expired()
+                .cause(Expired_Cause.EXTERNAL)
+                .intent(Expired_Intent.IGNORE)
+                .build()
+                .getCount();
+        long internalPropagate = metrics.expired()
+                .cause(Expired_Cause.INTERNAL)
+                .intent(Expired_Intent.PROPAGATE)
+                .build()
+                .getCount();
+        long internalPropagateAlreadyExpired = metrics.expired()
+                .cause(Expired_Cause.INTERNAL)
+                .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
+                .build()
+                .getCount();
+        long internalIgnore = metrics.expired()
+                .cause(Expired_Cause.INTERNAL)
+                .intent(Expired_Intent.IGNORE)
+                .build()
+                .getCount();
+        return externalPropagate
+                + externalPropagateAlreadyExpired
+                + externalIgnore
+                + internalPropagate
+                + internalPropagateAlreadyExpired
+                + internalIgnore;
     }
 
     // converts nanoseconds to a String representing seconds (or fractions thereof)
@@ -455,7 +534,8 @@ public final class Deadlines {
             long wallClockNanos,
             boolean internal,
             boolean disablePropagation,
-            Enforcement enforcement) {
+            Enforcement enforcement,
+            long numExpirations) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
