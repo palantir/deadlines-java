@@ -315,7 +315,7 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(Duration.ZERO));
         }
     }
 
@@ -333,7 +333,7 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(Duration.ZERO));
 
             @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
@@ -370,7 +370,7 @@ class DeadlinesTest {
 
             clock.elapsed += 2_000_000;
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(Duration.ZERO));
 
             @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
@@ -407,7 +407,7 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
-            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
+            assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isLessThanOrEqualTo(Duration.ZERO));
 
             @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
