@@ -58,7 +58,7 @@ org.wildfly.common:wildfly-common:1.5.0.Final (1 constraints: d90f288f)
 
 [Test dependencies]
 
-net.bytebuddy:byte-buddy:1.15.11 (1 constraints: 7f0bc9ea)
+net.bytebuddy:byte-buddy:1.17.7 (1 constraints: 560b56df)
 
 net.jqwik:jqwik:1.9.3 (1 constraints: 0f050e36)
 
@@ -72,7 +72,7 @@ net.jqwik:jqwik-web:1.9.3 (1 constraints: a007006d)
 
 org.apiguardian:apiguardian-api:1.1.2 (11 constraints: 9293fa1e)
 
-org.assertj:assertj-core:3.27.4 (1 constraints: 4205523b)
+org.assertj:assertj-core:3.27.5 (1 constraints: 4305533b)
 
 org.junit.jupiter:junit-jupiter:5.13.4 (1 constraints: 7e074077)
 
