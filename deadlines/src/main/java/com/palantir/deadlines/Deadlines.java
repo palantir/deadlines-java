@@ -197,15 +197,6 @@ public final class Deadlines {
         }
     }
 
-    public interface ResolvableEnforcement {
-        /**
-         * Resolves two requested enforcement strategies against each other (client-requested, and internal deadline
-         * state based on inbound request headers/service configuration) to produce a resulting enforcement strategy
-         * which should be used when making outbound requests.
-         */
-        Enforcement resolveWith(Enforcement other);
-    }
-
     /**
      * Selects the enforcement strategy when parsing a deadline value from a request.
      * <p>
@@ -214,7 +205,7 @@ public final class Deadlines {
      * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
      * when encoding a deadline for a new outbound request.
      */
-    public enum Enforcement implements ResolvableEnforcement {
+    public enum Enforcement {
         /**
          * ENFORCE means that future calls to {@link #encodeToRequest} will throw an exception if the deadline has
          * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
@@ -225,12 +216,7 @@ public final class Deadlines {
          * header with a value set to "false" will still override this to disable enforcement. This is intentional
          * to allow upstream nodes to short-circuit deadline enforcement if necessary.
          */
-        ENFORCE {
-            @Override
-            public Enforcement resolveWith(Enforcement other) {
-                return other.equals(Enforcement.DISABLE) ? other : this;
-            }
-        },
+        ENFORCE,
 
         /**
          * DEFER means that future calls to {@link #encodeToRequest} MAY throw an exception if the deadline
@@ -242,12 +228,7 @@ public final class Deadlines {
          * DEFER is used to indicate that we are deferring the enforcement strategy to either the inbound request,
          * or the next downstream hop, but will not enable enforcement here.
          */
-        DEFER {
-            @Override
-            public Enforcement resolveWith(Enforcement other) {
-                return other;
-            }
-        },
+        DEFER,
 
         /**
          * DISABLE means that deadline expiration will be ignored at this node, and ALL downstream nodes, regardless
@@ -257,11 +238,19 @@ public final class Deadlines {
          * "false". This effectively terminates deadline enforcement at this node and causes downstream nodes to
          * ignore further enforcement for this trace, regardless of their configured enforcement state.
          */
-        DISABLE {
-            @Override
-            public Enforcement resolveWith(Enforcement _other) {
-                return this;
-            }
+        DISABLE;
+
+        /**
+         * Resolves two requested enforcement strategies against each other (client-requested, and internal deadline
+         * state based on inbound request headers/service configuration) to produce a resulting enforcement strategy
+         * which should be used when making outbound requests.
+         */
+        public Enforcement resolveWith(Enforcement other) {
+            return switch (this) {
+                case DISABLE -> this;
+                case ENFORCE -> other.equals(Enforcement.DISABLE) ? other : this;
+                case DEFER -> other;
+            };
         }
     }
 
