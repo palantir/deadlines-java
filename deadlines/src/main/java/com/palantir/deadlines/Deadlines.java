@@ -20,6 +20,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
+import com.google.errorprone.annotations.InlineMe;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
@@ -53,11 +54,11 @@ public final class Deadlines {
 
     /**
      * Get the amount of time remaining for the current deadline.
-     *
+     * <p>
      * Queries the current deadline state from a TraceLocal, and returns a {@link Duration} for the
      * amount of time remaining towards that deadline. If the deadline has already expired, then
      * {@link Duration#ZERO} is returned.
-     *
+     * <p>
      * If no deadline state has been set for the current trace, return an empty Optional.
      *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
@@ -77,13 +78,13 @@ public final class Deadlines {
 
     /**
      * Disables propagation of deadline values any further for the current trace.
-     *
+     * <p>
      * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
      * further operations should not be subject to deadline enforcement.
-     *
+     * <p>
      * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
      * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
-     *
+     * <p>
      * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
      */
     public static void disableFurtherDeadlinePropagation() {
@@ -102,43 +103,46 @@ public final class Deadlines {
 
     /**
      * Encode a deadline into a request header.
-     *
+     * <p>
      * The actual deadline value encoded will be the minimum of:
      *   - the providedDeadline parameter
      *   - the value returned by {@link #getRemainingDeadline()}} if it exists
      * This ensures that the deadline set for the request will be based on the remaining deadline from
      * already-set internal state, or a smaller one if the caller chooses that.
-     *
-     * This function has no side-effects on the internal deadline state stored in a TraceLocal.
+     * <p>
+     * This function has no side effects on the internal deadline state stored in a TraceLocal.
+     * <p>
+     * The client requested enforcement strategy will be resolved against the internal state in the following manner:
+     *   - If either client or internal state requests {@link Enforcement#DISABLE}, then the deadline is not enforced.
+     *   - Then, if either client or internal state requests {@link Enforcement#ENFORCE}, then the deadline is enforced.
+     *   - Finally, if both the client and internal state requests {@link Enforcement#DEFER}, the deadline is not
+     *     enforced and a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is not encoded on the new request.
      *
      * @param proposedDeadline a proposed value for the deadline; the actual value used will be the minimum of
      * this value and one already set via a previous call to {@link #parseFromRequest}, if it exists
      * @param request the request object to write the encoding to
      * @param adapter a {@link RequestEncodingAdapter} that handles writing the header value to the request object
+     * @param clientEnforcement a client requested {@link Enforcement} state, which will be resolved against any
+     * existing state
      */
     public static <T> void encodeToRequest(
-            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+            Duration proposedDeadline,
+            T request,
+            RequestEncodingAdapter<? super T> adapter,
+            Enforcement clientEnforcement) {
         ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(
-                    proposedDeadlineNanos,
-                    false,
-                    false,
-                    false,
-                    // don't bother with enforcement here
-                    // if we don't have any existing deadline state, then we're merely checking that the caller
-                    // didn't pass in a negative deadline to this method
-                    // eventually, enforcement will be on by default anyway
-                    false);
+            checkExpiration(proposedDeadlineNanos, false, false, false, clientEnforcement == Enforcement.ENFORCE);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
+            encodeEnforcement(request, adapter, clientEnforcement);
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
-            Enforcement enforcement = stateDeadline.enforcement();
-            boolean enforced = enforcement == Enforcement.ENFORCE;
+            Enforcement resolvedEnforcement = stateDeadline.enforcement().resolveWith(clientEnforcement);
+            boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
                 checkExpiration(
@@ -150,7 +154,7 @@ public final class Deadlines {
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
-                    encodeEnforcement(request, adapter, enforcement);
+                    encodeEnforcement(request, adapter, resolvedEnforcement);
                 }
             } else {
                 checkExpiration(
@@ -164,10 +168,23 @@ public final class Deadlines {
                             request,
                             DeadlinesHttpHeaders.EXPECT_WITHIN,
                             durationToHeaderValue(remainingStateDeadlineNanos));
-                    encodeEnforcement(request, adapter, enforcement);
+                    encodeEnforcement(request, adapter, resolvedEnforcement);
                 }
             }
         }
+    }
+
+    /**
+     * Encode a deadline into a request header.
+     * @deprecated Use {@link #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)} instead
+     */
+    @Deprecated
+    @InlineMe(
+            replacement = "Deadlines.encodeToRequest(proposedDeadline, request, adapter, Enforcement.DEFER)",
+            imports = {"com.palantir.deadlines.Deadlines", "com.palantir.deadlines.Deadlines.Enforcement"})
+    public static <T> void encodeToRequest(
+            Duration proposedDeadline, T request, RequestEncodingAdapter<? super T> adapter) {
+        encodeToRequest(proposedDeadline, request, adapter, Enforcement.DEFER);
     }
 
     private static <T> void encodeEnforcement(
@@ -185,7 +202,7 @@ public final class Deadlines {
 
     /**
      * Selects the enforcement strategy when parsing a deadline value from a request.
-     *
+     * <p>
      * Enforcement controls whether this node should enforce expirations when they happen in a future call
      * to {@link #encodeToRequest} for the current trace. Enabling enforcement means that a {@link DeadlineExpiredException}
      * will be thrown when a deadline is detected to have expired, and that an enforcement flag will be propagated
@@ -197,7 +214,7 @@ public final class Deadlines {
          * expired, and also append an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header with the value set
          * to "true" when encoding future deadlines from the current trace to request enforcement from downstream
          * nodes as well.
-         *
+         * <p>
          * Note that calls to {@link #parseFromRequest} that receive an explicit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
          * header with a value set to "false" will still override this to disable enforcement. This is intentional
          * to allow upstream nodes to short-circuit deadline enforcement if necessary.
@@ -210,7 +227,7 @@ public final class Deadlines {
          * a request header (e.g. if {@link #parseFromRequest} received an {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED}
          * header set to "true"). Otherwise, no deadline expiration enforcement will happen at this node, and we will
          * omit {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} headers on future outbound requests.
-         *
+         * <p>
          * DEFER is used to indicate that we are deferring the enforcement strategy to either the inbound request,
          * or the next downstream hop, but will not enable enforcement here.
          */
@@ -224,70 +241,65 @@ public final class Deadlines {
          * "false". This effectively terminates deadline enforcement at this node and causes downstream nodes to
          * ignore further enforcement for this trace, regardless of their configured enforcement state.
          */
-        DISABLE
+        DISABLE;
+
+        /**
+         * Resolves two requested enforcement strategies against each other (client-requested, and internal deadline
+         * state based on inbound request headers/service configuration) to produce a resulting enforcement strategy
+         * which should be used when making outbound requests.
+         */
+        public Enforcement resolveWith(Enforcement other) {
+            return switch (this) {
+                case DISABLE -> this;
+                case ENFORCE -> other.equals(Enforcement.DISABLE) ? other : this;
+                case DEFER -> other;
+            };
+        }
     }
 
     private static Enforcement resolveEnforcementStrategy(
             @Nullable String headerEnforced, boolean headerDeadlineSet, Enforcement enforcementStrategy) {
         // check for the `Expect-Within-Enforced` flag in a header and set the outbound enforcement state
         // accordingly
-        // possible outcomes:
-        // possible outcomes:
-        //   - the enforcementStrategy == DISABLED => DISABLED
-        //   - the header is not present => enforcementStrategy == ENFORCE ? ENFORCE : DEFER
-        //   - the header is present but the `Expect-Within` header is absent => enforcementStrategy == ENFORCED ?
-        // ENFORCE :  DEFER
-        //   - the header is present and the value is "true" => ENFORCE
-        //   - the header is present and the value is "false" => DISABLE
-        //   - the header is present and the value is something else => enforcementStrategy == ENFORCED ? ENFORCE :
-        // DEFER
-        return switch (enforcementStrategy) {
-            case DISABLE -> Enforcement.DISABLE;
-            case ENFORCE -> {
-                // If the header deadline is not set, set the enforcement header to the provided enforcement strategy
-                // irrespective of the existing enforcement header.
-                if (!headerDeadlineSet) {
-                    yield Enforcement.ENFORCE;
-                }
-                // Deadlines will be enforced unless the header explicitly disables it.
-                if (headerEnforced != null && headerEnforced.equalsIgnoreCase("false")) {
-                    yield Enforcement.DISABLE;
-                }
-                yield Enforcement.ENFORCE;
-            }
-            case DEFER -> {
-                if (!headerDeadlineSet || headerEnforced == null) {
-                    yield Enforcement.DEFER;
-                }
-                if (headerEnforced.equalsIgnoreCase("true")) {
-                    yield Enforcement.ENFORCE;
-                } else if (headerEnforced.equalsIgnoreCase("false")) {
-                    yield Enforcement.DISABLE;
-                } else {
-                    yield Enforcement.DEFER;
-                }
-            }
-        };
+        return getEnforcementFromHeaders(headerEnforced, headerDeadlineSet).resolveWith(enforcementStrategy);
+    }
+
+    private static Enforcement getEnforcementFromHeaders(@Nullable String headerEnforced, boolean headerDeadlineSet) {
+        if (!headerDeadlineSet || headerEnforced == null) {
+            return Enforcement.DEFER;
+        }
+
+        if (headerEnforced.equalsIgnoreCase("true")) {
+            return Enforcement.ENFORCE;
+        } else if (headerEnforced.equalsIgnoreCase("false")) {
+            return Enforcement.DISABLE;
+        } else {
+            return Enforcement.DEFER;
+        }
     }
 
     /**
      * Parse a deadline value from a request header and set the deadline state for the current trace.
-     *
+     * <p>
      * If the request object contains a deadline value in a header, this method will parse it and store
      * the deadline value state internally in a TraceLocal, making it available to future calls to
      * {@link #getRemainingDeadline()}} from threads participating in the current trace. The deadline value
      * is read from a {@link DeadlinesHttpHeaders#EXPECT_WITHIN} header on the request object.
-     *
+     * <p>
      * Enforcement of the deadline is controlled in the following way:
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DISABLE}, then it is not enforced.
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DEFER}, then the deadline is enforced
-     *     only if a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "true"
-     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#ENFORCE}, then the deadline is enforced
      *   - If a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed with a value of "false", then
-     *     the deadline is not enforced and the the value of "enforcementStrategy" is ignored
-     *
-     * This function has side-effects on the internal deadline state stored in a TraceLocal; the state is
-     * set (or overwritten) based on the value of the deadline parsed from request headers.
+     *     the deadline is not enforced and the value of "enforcementStrategy" is ignored
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DISABLE}, then it is not enforced.
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#ENFORCE}, then the deadline state is
+     *     set to {@link Enforcement#ENFORCE}
+     *   - If the "enforcementStrategy" parameter is set to {@link Enforcement#DEFER}, then the deadline state is set to
+     *     {@link Enforcement#ENFORCE} only if a {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} header is parsed
+     *     with a value of "true"
+     * <p>
+     * This function has side effects on the internal deadline state stored in a TraceLocal; the state is
+     * set (or overwritten) based on the value of the deadline parsed from request headers. This state may eventually
+     * be resolved against a client-provided enforcement strategy if an outbound request is made, for details on
+     * resolution strategy, see {@link #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)}
      *
      * @param internalDeadline if present, represents an alternative deadline that should be used if it is
      * lower than the one parsed from a request header
