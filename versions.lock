@@ -28,13 +28,13 @@ com.palantir.tracing:tracing:6.29.0 (1 constraints: 4305663b)
 
 com.palantir.tracing:tracing-api:6.29.0 (1 constraints: d90c3616)
 
-com.palantir.tritium:tritium-api:0.116.0 (2 constraints: 911f17f4)
+com.palantir.tritium:tritium-api:0.117.0 (2 constraints: 931f4cf4)
 
-com.palantir.tritium:tritium-core:0.116.0 (1 constraints: 7010adb2)
+com.palantir.tritium:tritium-core:0.117.0 (1 constraints: 7110b0b2)
 
-com.palantir.tritium:tritium-metrics:0.116.0 (1 constraints: 6a059e40)
+com.palantir.tritium:tritium-metrics:0.117.0 (1 constraints: 6b05a140)
 
-com.palantir.tritium:tritium-registry:0.116.0 (2 constraints: d915a1f1)
+com.palantir.tritium:tritium-registry:0.117.0 (2 constraints: db15d6f1)
 
 io.dropwizard.metrics:metrics-core:4.2.37 (3 constraints: 5226f479)
 
