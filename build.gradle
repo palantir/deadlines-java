@@ -31,6 +31,7 @@ apply plugin: 'com.palantir.jdks.latest'
 apply plugin: 'com.palantir.failure-reports'
 
 javaVersions {
+    javaCompiler = 25
     libraryTarget = 17
     runtime = 25
 }
