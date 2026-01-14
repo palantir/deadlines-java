@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.google.errorprone.annotations.InlineMe;
+import com.google.errorprone.annotations.MustBeClosed;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
@@ -44,6 +45,8 @@ public final class Deadlines {
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
 
+    private static final ThreadLocal<ProvidedDeadline> threadLocalOverride = new ThreadLocal<>();
+
     @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
 
@@ -60,12 +63,17 @@ public final class Deadlines {
      * {@link Duration#ZERO} is returned.
      * <p>
      * If no deadline state has been set for the current trace, return an empty Optional.
+     * <p>
+     * If the current thread is within a {@link ScopedDeadline} created by {@link #withDeadline(Duration, Enforcement)}
+     * or {@link #withoutDeadline()}, the scoped deadline will be used instead of the TraceLocal state.
      *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        // Check thread-local override first
+        ProvidedDeadline override = threadLocalOverride.get();
+        ProvidedDeadline stateDeadline = override != null ? override : deadlineState.get();
         if (stateDeadline == null) {
             return Optional.empty();
         }
@@ -117,6 +125,99 @@ public final class Deadlines {
     }
 
     /**
+     * Execute a code block with an alternative deadline, ignoring the current TraceLocal state.
+     * <p>
+     * The alternative deadline will only affect the current thread for the duration of the
+     * returned scope. When the scope closes, the thread reverts to using the TraceLocal state.
+     * <p>
+     * This is useful when you need to execute an operation with a different deadline than the
+     * one currently in effect for the trace. For example, you might want to give a retry operation
+     * a shorter deadline than the overall request deadline.
+     * <p>
+     * Example usage:
+     * <pre>
+     * try (var scope = Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+     *     // This operation uses the 5-second deadline regardless of TraceLocal state
+     *     service.performOperation();
+     * }
+     * // Back to TraceLocal state
+     * </pre>
+     *
+     * @param deadline the alternative deadline duration
+     * @param enforcement the enforcement strategy for the alternative deadline
+     * @return a ScopedDeadline that must be closed to restore previous state
+     * @see #withDeadline(Duration)
+     */
+    @MustBeClosed
+    public static ScopedDeadline withDeadline(Duration deadline, Enforcement enforcement) {
+        long deadlineNanos = deadline.toNanos();
+        ProvidedDeadline override = new ProvidedDeadline(deadlineNanos, getClockNanoTime(), true, false, enforcement);
+        return new ThreadLocalScopedDeadline(override);
+    }
+
+    /**
+     * Execute a code block with an alternative deadline, inheriting the enforcement strategy
+     * from the current TraceLocal state.
+     * <p>
+     * This overload provides a convenient way to set a different deadline duration while
+     * preserving the enforcement strategy that's currently in effect. If there is no deadline
+     * state in the TraceLocal, the enforcement strategy defaults to {@link Enforcement#DEFER}.
+     * <p>
+     * The alternative deadline will only affect the current thread for the duration of the
+     * returned scope. When the scope closes, the thread reverts to using the TraceLocal state.
+     * <p>
+     * Example usage:
+     * <pre>
+     * try (ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+     *     // This operation uses the 5-second deadline with the current enforcement strategy
+     *     service.performOperation();
+     * }
+     * // Back to TraceLocal state
+     * </pre>
+     *
+     * @param deadline the alternative deadline duration
+     * @return a ScopedDeadline that must be closed to restore previous state
+     * @see #withDeadline(Duration, Enforcement)
+     */
+    @MustBeClosed
+    public static ScopedDeadline withDeadline(Duration deadline) {
+        // Determine enforcement from TraceLocal state, or default to DEFER
+        ProvidedDeadline traceLocalState = deadlineState.get();
+        Enforcement enforcement = traceLocalState != null ? traceLocalState.enforcement() : Enforcement.DEFER;
+        return withDeadline(deadline, enforcement);
+    }
+
+    /**
+     * Execute a code block without deadline constraints, ignoring the current TraceLocal state.
+     * <p>
+     * This is useful for operations that should never be subject to deadline enforcement,
+     * such as cleanup routines or logging operations that must complete regardless of the
+     * deadline state.
+     * <p>
+     * When this scope is active, calls to {@link #getRemainingDeadline()} will return
+     * {@link Optional#empty()}, and calls to {@link #encodeToRequest} will not propagate
+     * deadline information to downstream services.
+     * <p>
+     * Example usage:
+     * <pre>
+     * try (var scope = Deadlines.withoutDeadline()) {
+     *     // Cleanup operation not subject to deadlines
+     *     cleanupService.performCleanup();
+     * }
+     * // Back to TraceLocal state
+     * </pre>
+     *
+     * @return a ScopedDeadline that must be closed to restore previous state
+     */
+    @MustBeClosed
+    public static ScopedDeadline withoutDeadline() {
+        // Use a special marker: disablePropagation=true means "no deadline"
+        ProvidedDeadline override =
+                new ProvidedDeadline(Long.MAX_VALUE, getClockNanoTime(), true, true, Enforcement.DISABLE);
+        return new ThreadLocalScopedDeadline(override);
+    }
+
+    /**
      * Encode a deadline into a request header.
      * <p>
      * The actual deadline value encoded will be the minimum of:
@@ -126,6 +227,9 @@ public final class Deadlines {
      * already-set internal state, or a smaller one if the caller chooses that.
      * <p>
      * This function has no side effects on the internal deadline state stored in a TraceLocal.
+     * <p>
+     * If the current thread is within a {@link ScopedDeadline} created by {@link #withDeadline(Duration, Enforcement)}
+     * or {@link #withoutDeadline()}, the scoped deadline will be used instead of the TraceLocal state.
      * <p>
      * The client requested enforcement strategy will be resolved against the internal state in the following manner:
      *   - If either client or internal state requests {@link Enforcement#DISABLE}, then the deadline is not enforced.
@@ -145,7 +249,9 @@ public final class Deadlines {
             T request,
             RequestEncodingAdapter<? super T> adapter,
             Enforcement clientEnforcement) {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        // Check thread-local override first
+        ProvidedDeadline override = threadLocalOverride.get();
+        ProvidedDeadline stateDeadline = override != null ? override : deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
@@ -519,5 +625,39 @@ public final class Deadlines {
 
     interface Clock {
         long nanoTime();
+    }
+
+    /**
+     * A scope that temporarily overrides the deadline state for the current thread.
+     * <p>
+     * Instances of this type are returned by {@link #withDeadline(Duration, Enforcement)} and
+     * {@link #withoutDeadline()}. The scope must be closed to restore the previous deadline state.
+     * <p>
+     * Instances of this type are designed for use with try-with-resources:
+     * <pre>
+     * try (ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+     *     // code here uses the alternative deadline
+     * }
+     * // previous deadline state restored
+     * </pre>
+     */
+    public interface ScopedDeadline extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    private static final class ThreadLocalScopedDeadline implements ScopedDeadline {
+        @Nullable
+        private final ProvidedDeadline previousOverride;
+
+        ThreadLocalScopedDeadline(@Nullable ProvidedDeadline newOverride) {
+            this.previousOverride = threadLocalOverride.get();
+            threadLocalOverride.set(newOverride);
+        }
+
+        @Override
+        public void close() {
+            threadLocalOverride.set(previousOverride);
+        }
     }
 }
