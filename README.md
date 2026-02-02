@@ -2,9 +2,9 @@
 <a href="https://autorelease.general.dmz.palantir.tech/palantir/deadlines-java"><img src="https://img.shields.io/badge/Perform%20an-Autorelease-success.svg" alt="Autorelease"></a>
 </p>
 
-# Deadlines [![License](https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg)](https://opensource.org/licenses/Apache-2.0)
+# Deadlines-Java [![License](https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg)](https://opensource.org/licenses/Apache-2.0)
 
-_Deadlines is a library for implementing soft deadlines for [Dialogue](https://github.com/palantir/dialogue)-based RPC._
+_Deadlines-Java is a library for implementing soft deadlines for [Dialogue](https://github.com/palantir/dialogue)-based RPC._
 
 ## Overview
 
@@ -16,7 +16,7 @@ Deadlines allows clients to communicate time constraints to servers through HTTP
 
 ### Automatic Integration with Dialogue
 
-**Most users don't need to use this library directly.** When using [Dialogue](https://github.com/palantir/dialogue) clients, deadline propagation happens automatically:
+When using [Dialogue](https://github.com/palantir/dialogue) clients, deadline propagation happens automatically:
 
 - **Dialogue clients** automatically encode deadlines into the `Expect-Within` header based on socket read timeout or current trace context.
 - **Servers** can parse `Expect-Within` headers from incoming requests and propagate deadline state to outbound Dialogue requests. If using Witchcraft, this parsing and propagation is handled automatically.
