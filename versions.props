@@ -1,6 +1,6 @@
 io.dropwizard.metrics:metrics-core = 4.2.38
 com.google.guava:guava = 33.5.0-jre
-com.palantir.safe-logging:* = 3.11.0
+com.palantir.safe-logging:* = 3.12.0
 com.palantir.tracing:* = 6.31.0
 com.palantir.tritium:* = 0.124.0
 
