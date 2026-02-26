@@ -77,6 +77,25 @@ public final class Deadlines {
     }
 
     /**
+     * Get the enforcement strategy for the current deadline.
+     * <p>
+     * Queries the current deadline state from a TraceLocal, and returns the {@link Enforcement}
+     * strategy that was configured when the deadline was parsed or set.
+     * <p>
+     * If no deadline state has been set for the current trace, return an empty Optional.
+     *
+     * @return the enforcement strategy for the current trace, or {@link Optional#empty()} if no such
+     * deadline state exists.
+     */
+    public static Optional<Enforcement> getEnforcement() {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null) {
+            return Optional.empty();
+        }
+        return Optional.of(stateDeadline.enforcement());
+    }
+
+    /**
      * Disables propagation of deadline values any further for the current trace.
      * <p>
      * Callers can use this to short-circuit deadline propagation from the current trace when they are sure that
