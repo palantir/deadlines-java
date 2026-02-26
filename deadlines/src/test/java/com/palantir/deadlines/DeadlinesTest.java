@@ -958,6 +958,356 @@ class DeadlinesTest {
         }
     }
 
+    // Tests for scoped deadline overrides (withDeadline and withoutDeadline)
+
+    @Test
+    void withDeadline_overrides_trace_local_state() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state with 10 second deadline
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            assertThat(Deadlines.getRemainingDeadline()).isPresent();
+
+            // Override with 5 second deadline
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+                Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+                assertThat(remaining).isPresent();
+                assertThat(remaining.get()).isLessThanOrEqualTo(Duration.ofSeconds(5));
+                assertThat(remaining.get()).isGreaterThan(Duration.ofSeconds(4));
+            }
+
+            // After scope closes, TraceLocal state is restored
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).isPresent();
+            assertThat(remaining.get()).isGreaterThan(Duration.ofSeconds(9));
+        }
+    }
+
+    @Test
+    void withoutDeadline_disables_deadline_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state with deadline
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            assertThat(Deadlines.getRemainingDeadline()).isPresent();
+
+            // withoutDeadline should disable deadline
+            try (Deadlines.ScopedDeadline scope = Deadlines.withoutDeadline()) {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+            }
+
+            // After scope closes, TraceLocal state is restored
+            assertThat(Deadlines.getRemainingDeadline()).isPresent();
+        }
+    }
+
+    @Test
+    void withDeadline_encodeToRequest_uses_override() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state with 10 second deadline
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Override with 2 second deadline
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(2), Enforcement.ENFORCE)) {
+                Map<String, String> outbound = new HashMap<>();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+                // Should use the minimum of override (2s) and proposed (5s) = 2s
+                Long encoded = Deadlines.tryParseSecondsToNanoseconds(outbound.get(DeadlinesHttpHeaders.EXPECT_WITHIN));
+                assertThat(encoded)
+                        .isNotNull()
+                        .isLessThanOrEqualTo(Duration.ofSeconds(2).toNanos());
+                assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            }
+        }
+    }
+
+    @Test
+    void withoutDeadline_encodeToRequest_does_not_propagate() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state with deadline
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            // withoutDeadline should prevent propagation
+            try (Deadlines.ScopedDeadline scope = Deadlines.withoutDeadline()) {
+                Map<String, String> outbound = new HashMap<>();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+                // Should not encode any deadline headers
+                assertThat(outbound).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void withDeadline_enforces_expired_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Override with very short deadline
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofMillis(1), Enforcement.ENFORCE)) {
+                clock.elapsed += 2_000_000; // 2ms elapsed
+
+                Map<String, String> outbound = new HashMap<>();
+                assertThatExceptionOfType(DeadlineExpiredException.Internal.class)
+                        .isThrownBy(() -> Deadlines.encodeToRequest(
+                                Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER));
+            }
+        }
+    }
+
+    @Test
+    void withDeadline_scope_restored_on_exception() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            Duration originalRemaining = Deadlines.getRemainingDeadline().orElseThrow();
+
+            // Override with deadline and throw exception
+            assertThatThrownBy(() -> {
+                        try (Deadlines.ScopedDeadline scope =
+                                Deadlines.withDeadline(Duration.ofSeconds(1), Enforcement.ENFORCE)) {
+                            throw new RuntimeException("test exception");
+                        }
+                    })
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessage("test exception");
+
+            // TraceLocal state should be restored
+            Duration restoredRemaining = Deadlines.getRemainingDeadline().orElseThrow();
+            assertThat(restoredRemaining.toMillis()).isGreaterThanOrEqualTo(originalRemaining.toMillis() - 100);
+        }
+    }
+
+    @Test
+    void withDeadline_works_without_trace_context() {
+        // No trace context - TraceLocal is empty
+        assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+
+        // Override should still work
+        try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+            Optional<Duration> remaining = Deadlines.getRemainingDeadline();
+            assertThat(remaining).isPresent();
+            assertThat(remaining.get()).isLessThanOrEqualTo(Duration.ofSeconds(5));
+        }
+
+        // After scope closes, should be empty again
+        assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+    }
+
+    @Test
+    void withDeadline_thread_isolation() throws Exception {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state with 10 second deadline
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Create override in main thread
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(2), Enforcement.ENFORCE)) {
+                Duration mainThreadDeadline = Deadlines.getRemainingDeadline().orElseThrow();
+                assertThat(mainThreadDeadline).isLessThanOrEqualTo(Duration.ofSeconds(2));
+
+                // Check deadline in a different thread (not part of the trace)
+                Thread thread = new Thread(() -> {
+                    // Other thread should not see the override (no trace context)
+                    assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+                });
+                thread.start();
+                thread.join();
+
+                // Main thread should still have override
+                Duration stillOverridden = Deadlines.getRemainingDeadline().orElseThrow();
+                assertThat(stillOverridden).isLessThanOrEqualTo(Duration.ofSeconds(2));
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("NestedTryDepth")
+    void withDeadline_nested_scopes_handled_gracefully() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal state
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Outer scope with 5 second deadline
+            try (Deadlines.ScopedDeadline outerScope =
+                    Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+                Duration outerDeadline = Deadlines.getRemainingDeadline().orElseThrow();
+                assertThat(outerDeadline).isLessThanOrEqualTo(Duration.ofSeconds(5));
+
+                // Inner scope with 2 second deadline
+                try (Deadlines.ScopedDeadline innerScope =
+                        Deadlines.withDeadline(Duration.ofSeconds(2), Enforcement.DEFER)) {
+                    Duration innerDeadline = Deadlines.getRemainingDeadline().orElseThrow();
+                    assertThat(innerDeadline).isLessThanOrEqualTo(Duration.ofSeconds(2));
+                }
+
+                // After inner scope closes, outer scope is restored
+                Duration restoredOuter = Deadlines.getRemainingDeadline().orElseThrow();
+                assertThat(restoredOuter).isLessThanOrEqualTo(Duration.ofSeconds(5));
+            }
+
+            // After outer scope closes, TraceLocal is restored
+            Duration restoredTraceLocal = Deadlines.getRemainingDeadline().orElseThrow();
+            assertThat(restoredTraceLocal).isGreaterThan(Duration.ofSeconds(9));
+        }
+    }
+
+    @Test
+    void withDeadline_can_be_called_multiple_times_idempotent_close() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            assertThatCode(() -> {
+                        try (Deadlines.ScopedDeadline scope =
+                                Deadlines.withDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE)) {
+                            scope.close();
+                        } // Second close should be safe (idempotent)
+                    })
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    // Tests for withDeadline(Duration) overload that inherits enforcement
+
+    @Test
+    void withDeadline_single_param_inherits_enforce_from_trace_local() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal with ENFORCE strategy
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            inbound.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Use single-parameter withDeadline - should inherit ENFORCE
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+                Map<String, String> outbound = new HashMap<>();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+                // Should have ENFORCE strategy (from TraceLocal)
+                assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            }
+        }
+    }
+
+    @Test
+    void withDeadline_single_param_inherits_defer_from_trace_local() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal with DEFER strategy (no enforcement header)
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Use single-parameter withDeadline - should inherit DEFER
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+                Map<String, String> outbound = new HashMap<>();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+                // Should NOT have enforcement header (DEFER)
+                assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+            }
+        }
+    }
+
+    @Test
+    void withDeadline_single_param_inherits_disable_from_trace_local() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal with DISABLE strategy
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            inbound.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Use single-parameter withDeadline - should inherit DISABLE
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+                Map<String, String> outbound = new HashMap<>();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+                // Should have DISABLE strategy (false)
+                assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+            }
+        }
+    }
+
+    @Test
+    void withDeadline_single_param_defaults_to_defer_when_no_trace_local() {
+        // No trace context - TraceLocal is empty
+        assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+
+        // Use single-parameter withDeadline - should default to DEFER
+        try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+            // Should NOT have enforcement header (defaults to DEFER)
+            assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        }
+    }
+
+    @Test
+    void withDeadline_single_param_respects_inherited_enforcement_on_expiration() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            // Set up TraceLocal with ENFORCE strategy
+            Map<String, String> inbound = new HashMap<>();
+            inbound.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(10).toNanos()));
+            inbound.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.empty(), inbound, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            // Use single-parameter withDeadline with very short deadline
+            try (Deadlines.ScopedDeadline scope = Deadlines.withDeadline(Duration.ofMillis(1))) {
+                clock.elapsed += 2_000_000; // 2ms elapsed
+
+                Map<String, String> outbound = new HashMap<>();
+                // Should throw because inherited ENFORCE and deadline expired
+                assertThatExceptionOfType(DeadlineExpiredException.Internal.class)
+                        .isThrownBy(() -> Deadlines.encodeToRequest(
+                                Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER));
+            }
+        }
+    }
+
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
         INSTANCE;
 
