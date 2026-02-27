@@ -88,11 +88,7 @@ public final class Deadlines {
      * deadline state exists.
      */
     public static Optional<Enforcement> getEnforcement() {
-        ProvidedDeadline stateDeadline = deadlineState.get();
-        if (stateDeadline == null) {
-            return Optional.empty();
-        }
-        return Optional.of(stateDeadline.enforcement());
+        return Optional.ofNullable(deadlineState.get()).map(ProvidedDeadline::enforcement);
     }
 
     /**
