@@ -958,6 +958,93 @@ class DeadlinesTest {
         }
     }
 
+    @Test
+    void get_enforcement_returns_empty_when_no_deadline_state() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            assertThat(Deadlines.getEnforcement()).isEmpty();
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_enforce_when_parsed_with_enforce_strategy() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_defer_when_parsed_with_defer_strategy() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.DEFER);
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_disable_when_parsed_with_disable_strategy() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_enforce_when_header_requests_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_disable_when_header_disables_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            // Even though local strategy is ENFORCE, header "false" should override to DISABLE
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+        }
+    }
+
+    @Test
+    void get_enforcement_returns_empty_when_no_trace() {
+        Map<String, String> request = new HashMap<>();
+        request.put(
+                DeadlinesHttpHeaders.EXPECT_WITHIN,
+                Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+        Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+        // Without a trace, deadline state won't be set
+        assertThat(Deadlines.getEnforcement()).isEmpty();
+    }
+
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
         INSTANCE;
 
