@@ -2,11 +2,11 @@
 
 com.google.code.findbugs:jsr305:3.0.2 (1 constraints: a41965b5)
 
-com.google.errorprone:error_prone_annotations:2.43.0 (9 constraints: 9f85b633)
+com.google.errorprone:error_prone_annotations:2.47.0 (9 constraints: a5851a3c)
 
 com.google.guava:failureaccess:1.0.3 (1 constraints: 160ae3b4)
 
-com.google.guava:guava:33.5.0-jre (5 constraints: 2f491a5b)
+com.google.guava:guava:33.6.0-jre (5 constraints: 3049df5b)
 
 com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava (1 constraints: bd17c918)
 
