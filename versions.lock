@@ -14,15 +14,15 @@ com.google.j2objc:j2objc-annotations:3.1 (1 constraints: b809f1a0)
 
 com.palantir.nylon:nylon-threads:0.8.0 (1 constraints: 10100692)
 
-com.palantir.safe-logging:logger:3.13.0 (5 constraints: aa3f1078)
+com.palantir.safe-logging:logger:3.14.0 (5 constraints: ab3fbc78)
 
-com.palantir.safe-logging:logger-slf4j:3.13.0 (1 constraints: 320e9050)
+com.palantir.safe-logging:logger-slf4j:3.14.0 (1 constraints: 330e9350)
 
-com.palantir.safe-logging:logger-spi:3.13.0 (2 constraints: 731e76b0)
+com.palantir.safe-logging:logger-spi:3.14.0 (2 constraints: 751eacb0)
 
-com.palantir.safe-logging:preconditions:3.13.0 (6 constraints: 6a5016df)
+com.palantir.safe-logging:preconditions:3.14.0 (6 constraints: 6b50f1df)
 
-com.palantir.safe-logging:safe-logging:3.13.0 (9 constraints: 777f755e)
+com.palantir.safe-logging:safe-logging:3.14.0 (9 constraints: 7b7f7c62)
 
 com.palantir.tracing:tracing:6.33.0 (1 constraints: 3e05583b)
 
