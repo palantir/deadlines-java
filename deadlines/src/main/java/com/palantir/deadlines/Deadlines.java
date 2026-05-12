@@ -387,6 +387,12 @@ public final class Deadlines {
 
             metrics.expired().cause(cause).intent(intent).build().mark();
 
+            // Record the original deadline budget we were given. If state exists, use the original
+            // value stored at parse time; otherwise the deadline arg itself is the original budget.
+            ProvidedDeadline state = deadlineState.get();
+            long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
+            metrics.expiredBudget().update(originalBudgetNanos);
+
             if (enforced) {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
             }

@@ -38,3 +38,7 @@ namespaces:
                       the deadline expiration was reached. This means that further
                       RPC calls will not propagate an expired deadline value any more.
         docs: Marked every time a deadline expiration is reached
+      expired.budget:
+        type: histogram
+        docs: Records the original deadline budget (in nanoseconds) that was provided
+              to this service at the time of a deadline expiration.
