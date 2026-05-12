@@ -2,7 +2,7 @@
 
 com.google.code.findbugs:jsr305:3.0.2 (1 constraints: a41965b5)
 
-com.google.errorprone:error_prone_annotations:2.47.0 (9 constraints: b5859a40)
+com.google.errorprone:error_prone_annotations:2.49.0 (9 constraints: bb85c441)
 
 com.google.guava:failureaccess:1.0.3 (1 constraints: 160ae3b4)
 
@@ -28,13 +28,13 @@ com.palantir.tracing:tracing:6.34.0 (1 constraints: 3f055b3b)
 
 com.palantir.tracing:tracing-api:6.34.0 (1 constraints: d50c2b16)
 
-com.palantir.tritium:tritium-api:0.128.0 (2 constraints: 971fb8f4)
+com.palantir.tritium:tritium-api:0.129.0 (2 constraints: 991fedf4)
 
-com.palantir.tritium:tritium-core:0.128.0 (1 constraints: 7310b7b2)
+com.palantir.tritium:tritium-core:0.129.0 (1 constraints: 7410bab2)
 
-com.palantir.tritium:tritium-metrics:0.128.0 (1 constraints: 6d05a840)
+com.palantir.tritium:tritium-metrics:0.129.0 (1 constraints: 6e05ab40)
 
-com.palantir.tritium:tritium-registry:0.128.0 (2 constraints: df1542f2)
+com.palantir.tritium:tritium-registry:0.129.0 (2 constraints: e11577f2)
 
 io.dropwizard.metrics:metrics-core:4.2.38 (3 constraints: 5526837a)
 
