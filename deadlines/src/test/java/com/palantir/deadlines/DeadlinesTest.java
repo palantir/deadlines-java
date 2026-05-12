@@ -1052,8 +1052,9 @@ class DeadlinesTest {
         "0.005, SUB_10MS",
         "0.05, SUB_100MS",
         "0.5, SUB_1S",
-        "5.0, SUB_10S",
-        "50.0, SUB_100S",
+        "5, SUB_10S",
+        "50, SUB_100S",
+        "500, ABOVE_100S",
     })
     public void expired_budget_meter_records_correct_bucket(
             String deadlineSeconds, ExpiredBudget_Bucket expectedBucket) {
