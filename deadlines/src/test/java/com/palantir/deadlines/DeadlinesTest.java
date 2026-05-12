@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
+import com.palantir.deadlines.DeadlineMetrics.ExpiredBudget_Bucket;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.Enforcement;
@@ -1043,6 +1044,69 @@ class DeadlinesTest {
 
         // Without a trace, deadline state won't be set
         assertThat(Deadlines.getEnforcement()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "0.0000005, SUB_1MS",
+        "0.005, SUB_10MS",
+        "0.05, SUB_100MS",
+        "0.5, SUB_1S",
+        "5.0, SUB_10S",
+        "50.0, SUB_100S",
+    })
+    public void expired_budget_meter_records_correct_bucket(
+            String deadlineSeconds, ExpiredBudget_Bucket expectedBucket) {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, deadlineSeconds);
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            clock.elapsed += Long.MAX_VALUE;
+
+            @SuppressWarnings("for-rollout:deprecation")
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter expectedMeter = metrics.expiredBudget(expectedBucket);
+            long originalCount = expectedMeter.getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+            assertThat(expectedMeter.getCount()).isEqualTo(originalCount + 1);
+        }
+    }
+
+    @Test
+    public void expired_budget_meter_records_original_budget_not_remaining() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(5);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            clock.elapsed += 11_000_000_000L;
+
+            @SuppressWarnings("for-rollout:deprecation")
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter sub10sMeter = metrics.expiredBudget(ExpiredBudget_Bucket.SUB_10S);
+            Meter sub100sMeter = metrics.expiredBudget(ExpiredBudget_Bucket.SUB_100S);
+            long originalSub10s = sub10sMeter.getCount();
+            long originalSub100s = sub100sMeter.getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+            // Should record in sub-10s (original 5s budget), not any higher bucket
+            assertThat(sub10sMeter.getCount()).isEqualTo(originalSub10s + 1);
+            assertThat(sub100sMeter.getCount()).isEqualTo(originalSub100s);
+        }
     }
 
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
