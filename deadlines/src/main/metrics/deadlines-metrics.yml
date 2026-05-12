@@ -39,6 +39,23 @@ namespaces:
                       RPC calls will not propagate an expired deadline value any more.
         docs: Marked every time a deadline expiration is reached
       expired.budget:
-        type: histogram
-        docs: Records the original deadline budget (in nanoseconds) that was provided
-              to this service at the time of a deadline expiration.
+        type: meter
+        tags:
+          - name: bucket
+            values:
+              - value: sub-1ms
+                docs: Original deadline budget was less than 1 millisecond.
+              - value: sub-10ms
+                docs: Original deadline budget was less than 10 milliseconds.
+              - value: sub-100ms
+                docs: Original deadline budget was less than 100 milliseconds.
+              - value: sub-1s
+                docs: Original deadline budget was less than 1 second.
+              - value: sub-10s
+                docs: Original deadline budget was less than 10 seconds.
+              - value: sub-100s
+                docs: Original deadline budget was less than 100 seconds.
+              - value: above-100s
+                docs: Original deadline budget was 100 seconds or more.
+        docs: Records the original deadline budget bucket at the time of a deadline
+              expiration.

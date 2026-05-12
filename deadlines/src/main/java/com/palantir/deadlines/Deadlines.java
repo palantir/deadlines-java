@@ -387,15 +387,33 @@ public final class Deadlines {
 
             metrics.expired().cause(cause).intent(intent).build().mark();
 
-            // Record the original deadline budget we were given. If state exists, use the original
+            // Record the original deadline budget bucket. If state exists, use the original
             // value stored at parse time; otherwise the deadline arg itself is the original budget.
             ProvidedDeadline state = deadlineState.get();
             long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
-            metrics.expiredBudget().update(originalBudgetNanos);
+            metrics.expiredBudget(budgetBucket(originalBudgetNanos)).mark();
 
             if (enforced) {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
             }
+        }
+    }
+
+    private static DeadlineMetrics.ExpiredBudget_Bucket budgetBucket(long nanos) {
+        if (nanos < 1_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_1MS;
+        } else if (nanos < 10_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_10MS;
+        } else if (nanos < 100_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_100MS;
+        } else if (nanos < 1_000_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_1S;
+        } else if (nanos < 10_000_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_10S;
+        } else if (nanos < 100_000_000_000L) {
+            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_100S;
+        } else {
+            return DeadlineMetrics.ExpiredBudget_Bucket.ABOVE_100S;
         }
     }
 
