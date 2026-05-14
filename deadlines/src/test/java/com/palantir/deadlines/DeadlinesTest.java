@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
-import com.palantir.deadlines.DeadlineMetrics.ExpiredBudget_Bucket;
+import com.palantir.deadlines.DeadlineMetrics.Expired_Budget;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.Enforcement;
@@ -345,10 +345,12 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -383,10 +385,12 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -421,10 +425,12 @@ class DeadlinesTest {
             Meter externalMeterWillPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter externalMeterWontPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.IGNORE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalWillPropagateValue = externalMeterWillPropagate.getCount();
             long originalWontPropagateValue = externalMeterWontPropagate.getCount();
@@ -500,10 +506,12 @@ class DeadlinesTest {
             Meter expiredMeterPropagateIntent = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter expiredMeterPropagateAlreadyExpiredIntent = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
 
             long expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
@@ -572,6 +580,7 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.THROW)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
 
@@ -1048,16 +1057,13 @@ class DeadlinesTest {
 
     @ParameterizedTest
     @CsvSource({
-        "0.0000005, SUB_1MS",
-        "0.005, SUB_10MS",
         "0.05, SUB_100MS",
         "0.5, SUB_1S",
         "5, SUB_10S",
         "50, SUB_100S",
         "500, ABOVE_100S",
     })
-    public void expired_budget_meter_records_correct_bucket(
-            String deadlineSeconds, ExpiredBudget_Bucket expectedBucket) {
+    public void expired_budget_meter_records_correct_bucket(String deadlineSeconds, Expired_Budget expectedBucket) {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
@@ -1069,7 +1075,11 @@ class DeadlinesTest {
 
             @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter expectedMeter = metrics.expiredBudget(expectedBucket);
+            Meter expectedMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(expectedBucket)
+                    .build();
             long originalCount = expectedMeter.getCount();
 
             Map<String, String> outbound = new HashMap<>();
@@ -1095,8 +1105,16 @@ class DeadlinesTest {
 
             @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
-            Meter sub10sMeter = metrics.expiredBudget(ExpiredBudget_Bucket.SUB_10S);
-            Meter sub100sMeter = metrics.expiredBudget(ExpiredBudget_Bucket.SUB_100S);
+            Meter sub10sMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_10S)
+                    .build();
+            Meter sub100sMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100S)
+                    .build();
             long originalSub10s = sub10sMeter.getCount();
             long originalSub100s = sub100sMeter.getCount();
 

@@ -385,13 +385,17 @@ public final class Deadlines {
                 }
             }
 
-            metrics.expired().cause(cause).intent(intent).build().mark();
-
             // Record the original deadline budget bucket. If state exists, use the original
             // value stored at parse time; otherwise the deadline arg itself is the original budget.
             ProvidedDeadline state = deadlineState.get();
             long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
-            metrics.expiredBudget(budgetBucket(originalBudgetNanos)).mark();
+
+            metrics.expired()
+                    .cause(cause)
+                    .intent(intent)
+                    .budget(budgetBucket(originalBudgetNanos))
+                    .build()
+                    .mark();
 
             if (enforced) {
                 throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
@@ -399,21 +403,17 @@ public final class Deadlines {
         }
     }
 
-    private static DeadlineMetrics.ExpiredBudget_Bucket budgetBucket(long nanos) {
-        if (nanos < 1_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_1MS;
-        } else if (nanos < 10_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_10MS;
-        } else if (nanos < 100_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_100MS;
+    private static DeadlineMetrics.Expired_Budget budgetBucket(long nanos) {
+        if (nanos < 100_000_000L) {
+            return DeadlineMetrics.Expired_Budget.SUB_100MS;
         } else if (nanos < 1_000_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_1S;
+            return DeadlineMetrics.Expired_Budget.SUB_1S;
         } else if (nanos < 10_000_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_10S;
+            return DeadlineMetrics.Expired_Budget.SUB_10S;
         } else if (nanos < 100_000_000_000L) {
-            return DeadlineMetrics.ExpiredBudget_Bucket.SUB_100S;
+            return DeadlineMetrics.Expired_Budget.SUB_100S;
         } else {
-            return DeadlineMetrics.ExpiredBudget_Bucket.ABOVE_100S;
+            return DeadlineMetrics.Expired_Budget.ABOVE_100S;
         }
     }
 

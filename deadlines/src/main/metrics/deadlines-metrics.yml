@@ -20,7 +20,7 @@ namespaces:
                       complete required work before a client-provided deadline elapses.
           - name: intent
             docs: Describes the intent (or not) to propagate an expired deadline on
-                 further RPC calls.
+                  further RPC calls.
             values:
               - value: throw
                 docs: Enforcement was enabled for this trace at the time the deadline
@@ -37,16 +37,10 @@ namespaces:
                 docs: Deadline propagation was disabled for this trace at the time
                       the deadline expiration was reached. This means that further
                       RPC calls will not propagate an expired deadline value any more.
-        docs: Marked every time a deadline expiration is reached
-      expired.budget:
-        type: meter
-        tags:
-          - name: bucket
+          - name: budget
+            docs: Records the original deadline budget bucket at the time of a deadline
+                  expiration.
             values:
-              - value: sub-1ms
-                docs: Original deadline budget was less than 1 millisecond.
-              - value: sub-10ms
-                docs: Original deadline budget was less than 10 milliseconds.
               - value: sub-100ms
                 docs: Original deadline budget was less than 100 milliseconds.
               - value: sub-1s
@@ -57,5 +51,4 @@ namespaces:
                 docs: Original deadline budget was less than 100 seconds.
               - value: above-100s
                 docs: Original deadline budget was 100 seconds or more.
-        docs: Records the original deadline budget bucket at the time of a deadline
-              expiration.
+        docs: Marked every time a deadline expiration is reached
