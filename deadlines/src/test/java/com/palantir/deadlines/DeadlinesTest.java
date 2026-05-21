@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.codahale.metrics.Meter;
+import com.palantir.deadlines.DeadlineMetrics.Expired_Budget;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.Deadlines.Enforcement;
@@ -344,10 +345,12 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -382,10 +385,12 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter internalMeter = metrics.expired()
                     .cause(Expired_Cause.INTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
             long originalInternalValue = internalMeter.getCount();
@@ -420,10 +425,12 @@ class DeadlinesTest {
             Meter externalMeterWillPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter externalMeterWontPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.IGNORE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalWillPropagateValue = externalMeterWillPropagate.getCount();
             long originalWontPropagateValue = externalMeterWontPropagate.getCount();
@@ -499,10 +506,12 @@ class DeadlinesTest {
             Meter expiredMeterPropagateIntent = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             Meter expiredMeterPropagateAlreadyExpiredIntent = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.PROPAGATE_ALREADY_EXPIRED)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
 
             long expiredMeterPropagateIntentValue = expiredMeterPropagateIntent.getCount();
@@ -571,6 +580,7 @@ class DeadlinesTest {
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
                     .intent(Expired_Intent.THROW)
+                    .budget(Expired_Budget.SUB_100MS)
                     .build();
             long originalExternalValue = externalMeter.getCount();
 
@@ -1043,6 +1053,79 @@ class DeadlinesTest {
 
         // Without a trace, deadline state won't be set
         assertThat(Deadlines.getEnforcement()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "0.05, SUB_100MS",
+        "0.5, SUB_1S",
+        "5, SUB_10S",
+        "50, SUB_100S",
+        "500, ABOVE_100S",
+    })
+    public void expired_budget_meter_records_correct_bucket(String deadlineSeconds, Expired_Budget expectedBucket) {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, deadlineSeconds);
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            clock.elapsed += Long.MAX_VALUE;
+
+            @SuppressWarnings("for-rollout:deprecation")
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter expectedMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(expectedBucket)
+                    .build();
+            long originalCount = expectedMeter.getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+            assertThat(expectedMeter.getCount()).isEqualTo(originalCount + 1);
+        }
+    }
+
+    @Test
+    public void expired_budget_meter_records_original_budget_not_remaining() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            Duration providedDeadline = Duration.ofSeconds(5);
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
+
+            clock.elapsed += 11_000_000_000L;
+
+            @SuppressWarnings("for-rollout:deprecation")
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter sub10sMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_10S)
+                    .build();
+            Meter sub100sMeter = metrics.expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.PROPAGATE)
+                    .budget(Expired_Budget.SUB_100S)
+                    .build();
+            long originalSub10s = sub10sMeter.getCount();
+            long originalSub100s = sub100sMeter.getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+
+            // Should record in sub-10s (original 5s budget), not any higher bucket
+            assertThat(sub10sMeter.getCount()).isEqualTo(originalSub10s + 1);
+            assertThat(sub100sMeter.getCount()).isEqualTo(originalSub100s);
+        }
     }
 
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
