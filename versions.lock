@@ -36,7 +36,7 @@ com.palantir.tritium:tritium-metrics:0.130.0 (1 constraints: 66059440)
 
 com.palantir.tritium:tritium-registry:0.130.0 (2 constraints: d115d1f0)
 
-io.dropwizard.metrics:metrics-core:4.2.38 (3 constraints: 5526837a)
+io.dropwizard.metrics:metrics-core:4.2.39 (3 constraints: 5626e17a)
 
 io.smallrye.common:smallrye-common-annotation:2.14.0 (1 constraints: f20d0944)
 
