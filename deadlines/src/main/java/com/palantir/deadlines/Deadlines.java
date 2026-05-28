@@ -428,7 +428,7 @@ public final class Deadlines {
             return "0";
         }
         // this algorithm's precision only affords up to milliseconds, so we take the ceiling of the millis value.
-        // this helps avoid pathological scenarios where a deadline is propoagated through a deep call stack
+        // this helps avoid pathological scenarios where a deadline is propagated through a deep call stack
         // very quickly (at sub-millisecond precision); without adjusting to the ceiling, we would potentially
         // lose at least 1ms off the deadline on each RPC call which might cause request chains to abort
         // even though very little wall-clock time had elapsed.
