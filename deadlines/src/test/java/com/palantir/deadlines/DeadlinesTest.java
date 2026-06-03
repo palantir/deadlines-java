@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.quicktheories.QuickTheory.qt;
+import static org.quicktheories.generators.SourceDSL.lists;
 
 import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Budget;
@@ -37,18 +39,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import net.jqwik.api.ForAll;
-import net.jqwik.api.GenerationMode;
-import net.jqwik.api.Property;
-import net.jqwik.api.constraints.AlphaChars;
-import net.jqwik.api.constraints.LowerChars;
-import net.jqwik.api.constraints.NumericChars;
-import net.jqwik.api.constraints.StringLength;
-import net.jqwik.api.constraints.Whitespace;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.quicktheories.core.Gen;
+import org.quicktheories.generators.Generate;
 
 class DeadlinesTest {
 
@@ -155,28 +151,43 @@ class DeadlinesTest {
         assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
     }
 
-    @Property(tries = 100_000, generation = GenerationMode.AUTO)
-    void check_tryParseSecondsToNanoseconds_successfully_parses_numeric_values(
-            @ForAll @NumericChars @StringLength(min = 1, max = 100) String integer,
-            @ForAll @NumericChars @StringLength(min = 1, max = 100) String decimal) {
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(integer))
-                .isNotNull()
-                .isGreaterThanOrEqualTo(0)
-                .isLessThanOrEqualTo(Long.MAX_VALUE);
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(decimal))
-                .isNotNull()
-                .isGreaterThanOrEqualTo(0)
-                .isLessThanOrEqualTo(Long.MAX_VALUE);
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(integer + '.' + decimal))
-                .isNotNull()
-                .isGreaterThanOrEqualTo(0)
-                .isLessThanOrEqualTo(Long.MAX_VALUE);
+    @Test
+    void check_tryParseSecondsToNanoseconds_successfully_parses_numeric_values() {
+        Gen<String> numericStringGen = stringGen("0123456789", 1, 100);
+        qt().withExamples(100_000).forAll(numericStringGen, numericStringGen).checkAssert((integer, decimal) -> {
+            assertThat(Deadlines.tryParseSecondsToNanoseconds(integer))
+                    .isNotNull()
+                    .isGreaterThanOrEqualTo(0)
+                    .isLessThanOrEqualTo(Long.MAX_VALUE);
+            assertThat(Deadlines.tryParseSecondsToNanoseconds(decimal))
+                    .isNotNull()
+                    .isGreaterThanOrEqualTo(0)
+                    .isLessThanOrEqualTo(Long.MAX_VALUE);
+            assertThat(Deadlines.tryParseSecondsToNanoseconds(integer + '.' + decimal))
+                    .isNotNull()
+                    .isGreaterThanOrEqualTo(0)
+                    .isLessThanOrEqualTo(Long.MAX_VALUE);
+        });
     }
 
-    @Property(tries = 100_000, generation = GenerationMode.AUTO)
-    void check_tryParseSecondsToNanoseconds_handles_inputs(
-            @ForAll @AlphaChars @NumericChars @Whitespace @LowerChars @StringLength(min = 0, max = 100) String input) {
-        assertThatCode(() -> Deadlines.tryParseSecondsToNanoseconds(input)).doesNotThrowAnyException();
+    @Test
+    void check_tryParseSecondsToNanoseconds_handles_inputs() {
+        Gen<String> stringGen =
+                stringGen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\n\r", 0, 100);
+        qt().withExamples(100_000)
+                .forAll(stringGen)
+                .checkAssert(input -> assertThatCode(() -> Deadlines.tryParseSecondsToNanoseconds(input))
+                        .doesNotThrowAnyException());
+    }
+
+    private static Gen<String> stringGen(String validChars, int minLength, int maxLength) {
+        Gen<Character> characterGen =
+                Generate.pick(validChars.chars().mapToObj(c -> (char) c).toList());
+        return lists().of(characterGen).ofSizeBetween(minLength, maxLength).map(chars -> {
+            StringBuilder sb = new StringBuilder(chars.size());
+            chars.forEach(sb::append);
+            return sb.toString();
+        });
     }
 
     @Test
