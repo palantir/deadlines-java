@@ -1,5 +1,0 @@
-type: improvement
-improvement:
-  description: Optimize Deadlines::tryParseSecondsToNanoseconds
-  links:
-  - https://github.com/palantir/deadlines-java/pull/19

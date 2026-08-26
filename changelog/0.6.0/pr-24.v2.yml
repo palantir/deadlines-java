@@ -1,5 +1,0 @@
-type: improvement
-improvement:
-  description: Expand parsing tests
-  links:
-  - https://github.com/palantir/deadlines-java/pull/24

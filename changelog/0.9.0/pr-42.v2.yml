@@ -1,5 +1,0 @@
-type: improvement
-improvement:
-  description: add ability to disable deadline propagation
-  links:
-  - https://github.com/palantir/deadlines-java/pull/42

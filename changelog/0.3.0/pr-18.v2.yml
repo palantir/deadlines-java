@@ -1,5 +1,0 @@
-type: improvement
-improvement:
-  description: Log `expect-within` header parsing failures
-  links:
-  - https://github.com/palantir/deadlines-java/pull/18
