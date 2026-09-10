@@ -23,6 +23,7 @@ import com.google.common.util.concurrent.RateLimiter;
 import com.google.errorprone.annotations.InlineMe;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
+import com.palantir.deadlines.DeadlineState.Origin;
 import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;
@@ -77,6 +78,22 @@ public final class Deadlines {
     }
 
     /**
+     * Returns an immutable snapshot of the current trace deadline, or empty if no deadline is present or further
+     * propagation is disabled.
+     */
+    public static Optional<DeadlineState> getDeadlineState() {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null || stateDeadline.disablePropagation()) {
+            return Optional.empty();
+        }
+        long remaining = stateDeadline.remainingNanos(getClockNanoTime());
+        return Optional.of(new DeadlineState(
+                remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining),
+                stateDeadline.enforcement(),
+                stateDeadline.internal() ? Origin.INTERNAL : Origin.EXTERNAL));
+    }
+
+    /**
      * Get the enforcement strategy for the current deadline.
      * <p>
      * Queries the current deadline state from a TraceLocal, and returns the {@link Enforcement}
@@ -100,7 +117,7 @@ public final class Deadlines {
      * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
      * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
      * <p>
-     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
+     * Further calls to {@link #getRemainingDeadline} and {@link #getDeadlineState} will return {@link Optional#empty()}.
      */
     public static void disableFurtherDeadlinePropagation() {
         ProvidedDeadline currentState = deadlineState.get();
