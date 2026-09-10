@@ -27,28 +27,22 @@ import com.codahale.metrics.Meter;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Budget;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
-import com.palantir.deadlines.DeadlineState.Origin;
 import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
 import com.palantir.tracing.DetachedSpan;
-import com.palantir.tracing.Tracer;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.FutureTask;
+import java.util.function.Supplier;
 import javax.annotation.Nullable;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.quicktheories.core.Gen;
 import org.quicktheories.generators.Generate;
@@ -1146,157 +1140,44 @@ class DeadlinesTest {
         }
     }
 
-    @Nested
-    class DeadlineStateTests {
-        private final TestClock clock = new TestClock();
+    @Test
+    public void deadline_exception_supplier_is_empty_when_no_deadline_is_set() {
+        assertThat(Deadlines.getDeadlineExpiredExceptionSupplier()).isEmpty();
+    }
 
-        @BeforeEach
-        void before() {
-            Deadlines.setClock(clock);
+    @Test
+    public void deadline_exception_supplier_is_empty_when_propagation_is_disabled() {
+        try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            assertThat(Deadlines.getDeadlineExpiredExceptionSupplier()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2,3,true,ENFORCE", "3,2,false,DEFER", "2,2,false,DISABLE"})
+    public void deadline_exception_supplier_captures_origin_and_creates_new_exceptions(
+            int internalSeconds, String headerSeconds, boolean expectedInternal, Enforcement enforcement) {
+        Supplier<DeadlineExpiredException> exceptionSupplier;
+        try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(internalSeconds)),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, headerSeconds),
+                    DummyRequestDecoder.INSTANCE,
+                    enforcement);
+            exceptionSupplier = Deadlines.getDeadlineExpiredExceptionSupplier().orElseThrow();
         }
 
-        @AfterEach
-        void after() {
-            Deadlines.setClock(System::nanoTime);
-        }
-
-        @Test
-        void returns_empty_without_creating_a_trace() {
-            assertThat(Tracer.hasTraceId()).isFalse();
-            assertThat(Deadlines.getDeadlineState()).isEmpty();
-            assertThat(Tracer.hasTraceId()).isFalse();
-        }
-
-        @Test
-        void returns_empty_when_the_trace_has_no_deadline() {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                assertThat(Deadlines.getDeadlineState()).isEmpty();
-            }
-        }
-
-        @ParameterizedTest
-        @EnumSource(Enforcement.class)
-        void captures_remaining_time_and_stored_enforcement(Enforcement enforcement) {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, enforcement);
-                clock.elapsed = 2_000_000_000L;
-
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(Duration.ofSeconds(3), enforcement, Origin.INTERNAL));
-            }
-        }
-
-        @ParameterizedTest
-        @CsvSource({"2,,2,EXTERNAL", "2,3,2,EXTERNAL", "3,2,2,INTERNAL", "2,2,2,EXTERNAL"})
-        void captures_origin_of_the_selected_deadline(
-                String headerSeconds, @Nullable Integer internalSeconds, int expectedSeconds, Origin expectedOrigin) {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.ofNullable(internalSeconds).map(Duration::ofSeconds),
-                        Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, headerSeconds),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.DEFER);
-
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(
-                                Duration.ofSeconds(expectedSeconds), Enforcement.DEFER, expectedOrigin));
-            }
-        }
-
-        @Test
-        void returns_empty_after_propagation_is_disabled() {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.of(Duration.ofSeconds(5)),
-                        Map.of(),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.ENFORCE);
-                assertThat(Deadlines.getDeadlineState()).isPresent();
-
-                Deadlines.disableFurtherDeadlinePropagation();
-
-                assertThat(Deadlines.getDeadlineState()).isEmpty();
-            }
-        }
-
-        @ParameterizedTest
-        @CsvSource({"4999999999,1", "5000000000,0", "5000000001,0"})
-        void remaining_time_is_clamped_at_expiration(long elapsedNanos, long expectedRemainingNanos) {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.of(Duration.ofSeconds(5)),
-                        Map.of(),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.ENFORCE);
-                clock.elapsed = elapsedNanos;
-
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(
-                                Duration.ofNanos(expectedRemainingNanos), Enforcement.ENFORCE, Origin.INTERNAL));
-            }
-        }
-
-        @Test
-        void snapshot_survives_elapsed_time_trace_changes_and_detachment() {
-            DeadlineState snapshot;
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.of(Duration.ofSeconds(10)),
-                        Map.of(),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.ENFORCE);
-                snapshot = Deadlines.getDeadlineState().orElseThrow();
-                clock.elapsed = 3_000_000_000L;
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(Duration.ofSeconds(7), Enforcement.ENFORCE, Origin.INTERNAL));
-
-                Deadlines.parseFromRequest(
-                        Optional.empty(),
-                        Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "4"),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.DISABLE);
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(Duration.ofSeconds(4), Enforcement.DISABLE, Origin.EXTERNAL));
-                Deadlines.disableFurtherDeadlinePropagation();
-            }
-
-            FutureTask<DeadlineState> readSnapshot = new FutureTask<>(() -> {
-                assertThat(Tracer.hasTraceId()).isFalse();
-                return new DeadlineState(snapshot.remainingTime(), snapshot.enforcement(), snapshot.origin());
-            });
-            new Thread(readSnapshot, "deadline-state-test").start();
-            assertThat(readSnapshot)
-                    .succeedsWithin(Duration.ofSeconds(5))
-                    .isEqualTo(new DeadlineState(Duration.ofSeconds(10), Enforcement.ENFORCE, Origin.INTERNAL));
-        }
-
-        @Test
-        void reading_expired_state_does_not_record_metrics_or_modify_the_deadline() {
-            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-                Deadlines.parseFromRequest(
-                        Optional.of(Duration.ofSeconds(5)),
-                        Map.of(),
-                        DummyRequestDecoder.INSTANCE,
-                        Enforcement.ENFORCE);
-                clock.elapsed = 6_000_000_000L;
-                @SuppressWarnings("for-rollout:deprecation")
-                Meter expired = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton())
-                        .expired()
-                        .cause(Expired_Cause.INTERNAL)
-                        .intent(Expired_Intent.THROW)
-                        .budget(Expired_Budget.SUB_10S)
-                        .build();
-                long count = expired.getCount();
-
-                assertThat(Deadlines.getDeadlineState())
-                        .contains(new DeadlineState(Duration.ZERO, Enforcement.ENFORCE, Origin.INTERNAL));
-
-                assertThat(expired.getCount()).isEqualTo(count);
-                assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ZERO);
-                assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
-            }
-        }
+        DeadlineExpiredException exception = exceptionSupplier.get();
+        assertThat(exception)
+                .isInstanceOf(
+                        expectedInternal
+                                ? DeadlineExpiredException.Internal.class
+                                : DeadlineExpiredException.External.class);
+        assertThat(exceptionSupplier.get()).isNotSameAs(exception);
     }
 
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
