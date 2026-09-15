@@ -30,7 +30,6 @@ import com.palantir.tracing.TraceLocal;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.Optional;
-import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
 /**
@@ -78,19 +77,29 @@ public final class Deadlines {
     }
 
     /**
-     * Returns a supplier of new expiration exceptions for the current trace deadline, or empty if no deadline is
-     * present or further propagation is disabled.
+     * Throws a {@link DeadlineExpiredException} if the current trace deadline has expired and is enforced, recording
+     * the expiration in the {@code deadline.expired} meter.
      * <p>
-     * The deadline's origin is captured when this method is called. Each invocation of the supplier constructs a new
-     * exception without accessing tracing state. Neither this method nor the supplier checks expiration or enforcement.
+     * This is the counterpart to the check {@link #encodeToRequest} performs, for callers that need to enforce a
+     * deadline at a point where they are not sending a request -- for example when work that was waiting on a
+     * deadline-bounded budget is about to give up. It is a no-op when no deadline is present, when the deadline has
+     * not yet expired, or when further propagation has been disabled for this trace.
+     *
+     * @param clientEnforcement the caller's requested strategy, resolved against the trace's stored strategy using
+     *     {@link Enforcement#resolveWith(Enforcement)}
      */
-    public static Optional<Supplier<DeadlineExpiredException>> getDeadlineExpiredExceptionSupplier() {
+    public static void checkDeadline(Enforcement clientEnforcement) {
         ProvidedDeadline stateDeadline = deadlineState.get();
         if (stateDeadline == null || stateDeadline.disablePropagation()) {
-            return Optional.empty();
+            // The deadline no longer applies to this trace, so its expiry is not an event worth reporting.
+            return;
         }
-        return Optional.of(
-                stateDeadline.internal() ? DeadlineExpiredException::internal : DeadlineExpiredException::external);
+        checkExpiration(
+                stateDeadline.remainingNanos(getClockNanoTime()),
+                stateDeadline.internal(),
+                stateDeadline.disablePropagation(),
+                stateDeadline.alreadyExpired(),
+                stateDeadline.enforcement().resolveWith(clientEnforcement) == Enforcement.ENFORCE);
     }
 
     /**
@@ -117,8 +126,8 @@ public final class Deadlines {
      * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
      * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
      * <p>
-     * Further calls to {@link #getRemainingDeadline} and {@link #getDeadlineExpiredExceptionSupplier} will return
-     * {@link Optional#empty()}.
+     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}, and
+     * {@link #checkDeadline} becomes a no-op.
      */
     public static void disableFurtherDeadlinePropagation() {
         ProvidedDeadline currentState = deadlineState.get();

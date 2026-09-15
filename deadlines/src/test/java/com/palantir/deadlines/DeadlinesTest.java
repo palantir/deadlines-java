@@ -38,8 +38,10 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Supplier;
 import javax.annotation.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -1140,44 +1142,142 @@ class DeadlinesTest {
         }
     }
 
-    @Test
-    public void deadline_exception_supplier_is_empty_when_no_deadline_is_set() {
-        assertThat(Deadlines.getDeadlineExpiredExceptionSupplier()).isEmpty();
-    }
+    @Nested
+    class CheckDeadlineTests {
+        private final TestClock clock = new TestClock();
 
-    @Test
-    public void deadline_exception_supplier_is_empty_when_propagation_is_disabled() {
-        try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-            Deadlines.parseFromRequest(
-                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+        @BeforeEach
+        void before() {
+            Deadlines.setClock(clock);
+        }
 
-            Deadlines.disableFurtherDeadlinePropagation();
+        @AfterEach
+        void after() {
+            Deadlines.setClock(System::nanoTime);
+        }
 
-            assertThat(Deadlines.getDeadlineExpiredExceptionSupplier()).isEmpty();
+        @Test
+        void no_op_without_a_deadline() {
+            assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE)).doesNotThrowAnyException();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+            }
+        }
+
+        @Test
+        void no_op_before_the_deadline_expires() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                clock.elapsed = 4_999_999_999L;
+
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.DEFER)).doesNotThrowAnyException();
+            }
+        }
+
+        @ParameterizedTest
+        @CsvSource({"5000000000", "6000000000"})
+        void throws_once_an_enforced_deadline_has_expired(long elapsedNanos) {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                clock.elapsed = elapsedNanos;
+
+                assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER))
+                        .isInstanceOf(DeadlineExpiredException.Internal.class);
+            }
+        }
+
+        @Test
+        void reports_an_externally_imposed_deadline_as_external() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                Deadlines.parseFromRequest(
+                        Optional.empty(),
+                        Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "5"),
+                        DummyRequestDecoder.INSTANCE,
+                        Enforcement.ENFORCE);
+                clock.elapsed = 6_000_000_000L;
+
+                assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER))
+                        .isInstanceOf(DeadlineExpiredException.External.class);
+            }
+        }
+
+        @Test
+        void resolves_enforcement_against_the_caller() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.DEFER);
+                clock.elapsed = 6_000_000_000L;
+
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.DEFER))
+                        .as("neither side asked for enforcement")
+                        .doesNotThrowAnyException();
+                assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .as("the caller opts in, so a deferred trace deadline is enforced")
+                        .isInstanceOf(DeadlineExpiredException.class);
+            }
+        }
+
+        @Test
+        void caller_cannot_enforce_a_disabled_trace_deadline() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.DISABLE);
+                clock.elapsed = 6_000_000_000L;
+
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+            }
+        }
+
+        @Test
+        void no_op_and_no_metric_after_propagation_is_disabled() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                Deadlines.disableFurtherDeadlinePropagation();
+                clock.elapsed = 6_000_000_000L;
+                long ignoredCount = expiredMeter(Expired_Cause.INTERNAL, Expired_Intent.IGNORE)
+                        .getCount();
+
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .as("the deadline no longer applies to this trace")
+                        .doesNotThrowAnyException();
+
+                assertThat(expiredMeter(Expired_Cause.INTERNAL, Expired_Intent.IGNORE)
+                                .getCount())
+                        .as("a deadline that no longer applies is not an expiration event")
+                        .isEqualTo(ignoredCount);
+            }
+        }
+
+        @Test
+        void records_the_expiration_it_throws_for() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                clock.elapsed = 6_000_000_000L;
+                long before = expiredMeter(Expired_Cause.INTERNAL, Expired_Intent.THROW)
+                        .getCount();
+
+                assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .isInstanceOf(DeadlineExpiredException.class);
+
+                assertThat(expiredMeter(Expired_Cause.INTERNAL, Expired_Intent.THROW)
+                                .getCount())
+                        .isEqualTo(before + 1);
+            }
+        }
+
+        private void setDeadline(Duration remaining, Enforcement enforcement) {
+            Deadlines.parseFromRequest(Optional.of(remaining), Map.of(), DummyRequestDecoder.INSTANCE, enforcement);
         }
     }
 
-    @ParameterizedTest
-    @CsvSource({"2,3,true,ENFORCE", "3,2,false,DEFER", "2,2,false,DISABLE"})
-    public void deadline_exception_supplier_captures_origin_and_creates_new_exceptions(
-            int internalSeconds, String headerSeconds, boolean expectedInternal, Enforcement enforcement) {
-        Supplier<DeadlineExpiredException> exceptionSupplier;
-        try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
-            Deadlines.parseFromRequest(
-                    Optional.of(Duration.ofSeconds(internalSeconds)),
-                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, headerSeconds),
-                    DummyRequestDecoder.INSTANCE,
-                    enforcement);
-            exceptionSupplier = Deadlines.getDeadlineExpiredExceptionSupplier().orElseThrow();
-        }
-
-        DeadlineExpiredException exception = exceptionSupplier.get();
-        assertThat(exception)
-                .isInstanceOf(
-                        expectedInternal
-                                ? DeadlineExpiredException.Internal.class
-                                : DeadlineExpiredException.External.class);
-        assertThat(exceptionSupplier.get()).isNotSameAs(exception);
+    @SuppressWarnings("for-rollout:deprecation")
+    private static Meter expiredMeter(Expired_Cause cause, Expired_Intent intent) {
+        return DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton())
+                .expired()
+                .cause(cause)
+                .intent(intent)
+                .budget(Expired_Budget.SUB_10S)
+                .build();
     }
 
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {
