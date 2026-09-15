@@ -44,7 +44,6 @@ public final class Deadlines {
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
 
-    @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
 
     private static final CharMatcher decimalMatcher =
