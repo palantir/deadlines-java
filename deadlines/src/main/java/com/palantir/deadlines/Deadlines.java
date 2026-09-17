@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.google.errorprone.annotations.InlineMe;
+import com.google.errorprone.annotations.MustBeClosed;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
@@ -44,6 +45,11 @@ public final class Deadlines {
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
 
+    // Threads which should not observe the deadline stored for the trace they are running in. This is deliberately
+    // not trace state: a trace's TraceLocal values are shared by reference with every other thread participating in
+    // that trace, so hiding a deadline by mutating them would hide it from the whole trace.
+    private static final ThreadLocal<Boolean> suppressed = new ThreadLocal<>();
+
     @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
 
@@ -65,7 +71,7 @@ public final class Deadlines {
      * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        ProvidedDeadline stateDeadline = visibleDeadline();
         if (stateDeadline == null) {
             return Optional.empty();
         }
@@ -74,6 +80,32 @@ public final class Deadlines {
         }
         long remaining = stateDeadline.remainingNanos(getClockNanoTime());
         return Optional.of(remaining <= 0 ? Duration.ZERO : Duration.ofNanos(remaining));
+    }
+
+    /**
+     * Hides the current trace's deadline from the current thread until the returned scope is closed.
+     * <p>
+     * Within the scope, {@link #getRemainingDeadline} and {@link #getEnforcement} return
+     * {@link Optional#empty()}, {@link #checkDeadline} is a no-op, and {@link #encodeToRequest} behaves as though
+     * no deadline had been parsed for the trace: the proposed deadline is encoded as-is rather than being reduced
+     * to the trace's remaining time, and an expired deadline is not enforced.
+     * <p>
+     * This exists for work that is shared between callers rather than performed on behalf of one of them, such as
+     * a cache load which several requests are waiting on. Such work inherits the trace, and therefore the deadline,
+     * of whichever caller happened to start it; without suppression the caller with the smallest budget can fail
+     * work that every other waiter still has ample time for.
+     * <p>
+     * The suppression applies only to the calling thread, and only until the scope is closed. It does not modify
+     * the deadline stored for the trace, so threads running concurrently in the same trace are unaffected, and it
+     * is not inherited by work handed off to other threads from within the scope.
+     */
+    @MustBeClosed
+    public static CloseableDeadlineSuppression suppressDeadline() {
+        if (Boolean.TRUE.equals(suppressed.get())) {
+            return DeadlineSuppression.ALREADY_SUPPRESSED;
+        }
+        suppressed.set(Boolean.TRUE);
+        return DeadlineSuppression.RESTORE_ON_CLOSE;
     }
 
     /**
@@ -88,7 +120,46 @@ public final class Deadlines {
      * deadline state exists.
      */
     public static Optional<Enforcement> getEnforcement() {
-        return Optional.ofNullable(deadlineState.get()).map(ProvidedDeadline::enforcement);
+        return Optional.ofNullable(visibleDeadline()).map(ProvidedDeadline::enforcement);
+    }
+
+    /**
+     * Enforce the current deadline, if it has expired and enforcement is enabled.
+     * <p>
+     * This is the counterpart to the check {@link #encodeToRequest} performs, for callers that need to enforce a
+     * deadline at a point where they are not sending a request. For example, work which is waiting on a budget
+     * bounded by the deadline can use this to give up once that budget is exhausted.
+     * <p>
+     * The requested enforcement is resolved against the strategy stored for the trace in the same way as
+     * {@link #encodeToRequest}. When the resolved strategy is {@link Enforcement#ENFORCE} and the deadline has
+     * expired, a {@link DeadlineExpiredException} is thrown and the {@code deadline.expired} meter is marked.
+     * Otherwise the expiration is recorded as ignored and this method returns normally, leaving the caller to
+     * decide whether to continue.
+     * <p>
+     * This is a no-op when no deadline is set for the current trace, when the deadline has not expired, when
+     * further propagation has been disabled via {@link #disableFurtherDeadlinePropagation}, or when the deadline is
+     * suppressed on this thread via {@link #suppressDeadline}.
+     *
+     * @param clientEnforcement a client requested {@link Enforcement} state, which will be resolved against any
+     * existing state
+     * @throws DeadlineExpiredException if the deadline has expired and the resolved enforcement strategy is
+     * {@link Enforcement#ENFORCE}
+     */
+    public static void checkDeadline(Enforcement clientEnforcement) {
+        ProvidedDeadline stateDeadline = visibleDeadline();
+        if (stateDeadline == null || stateDeadline.disablePropagation()) {
+            return;
+        }
+        if (stateDeadline.remainingNanos(getClockNanoTime()) > 0) {
+            return;
+        }
+        boolean enforced = stateDeadline.enforcement().resolveWith(clientEnforcement) == Enforcement.ENFORCE;
+        reportExpiration(
+                stateDeadline.internal(),
+                // this check does not propagate the expired deadline anywhere, so the only intents that apply are
+                // throwing and ignoring it
+                enforced ? Expired_Intent.THROW : Expired_Intent.IGNORE,
+                stateDeadline.valueNanos());
     }
 
     /**
@@ -145,7 +216,7 @@ public final class Deadlines {
             T request,
             RequestEncodingAdapter<? super T> adapter,
             Enforcement clientEnforcement) {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        ProvidedDeadline stateDeadline = visibleDeadline();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
@@ -359,6 +430,21 @@ public final class Deadlines {
         parseFromRequest(internalDeadline, request, adapter, Enforcement.DEFER);
     }
 
+    /**
+     * The deadline stored for the current trace, unless it is suppressed on this thread.
+     * <p>
+     * The null check is first so that traces without a deadline, which is the common case for services that do not
+     * receive one, do not pay for the additional thread local read.
+     */
+    @Nullable
+    private static ProvidedDeadline visibleDeadline() {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null || Boolean.TRUE.equals(suppressed.get())) {
+            return null;
+        }
+        return stateDeadline;
+    }
+
     private static void storeDeadline(long deadline, boolean internal, Enforcement enforcement) {
         ProvidedDeadline providedDeadline =
                 new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement);
@@ -369,7 +455,6 @@ public final class Deadlines {
             long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired, boolean enforced) {
         if (deadline <= 0) {
             // expired
-            Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
             Expired_Intent intent;
             if (enforced) {
                 // intent is always "throw" if enforced = true, regardless of what the other flags are
@@ -387,19 +472,23 @@ public final class Deadlines {
 
             // Record the original deadline budget bucket. If state exists, use the original
             // value stored at parse time; otherwise the deadline arg itself is the original budget.
-            ProvidedDeadline state = deadlineState.get();
+            ProvidedDeadline state = visibleDeadline();
             long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
 
-            metrics.expired()
-                    .cause(cause)
-                    .intent(intent)
-                    .budget(budgetBucket(originalBudgetNanos))
-                    .build()
-                    .mark();
+            reportExpiration(internal, intent, originalBudgetNanos);
+        }
+    }
 
-            if (enforced) {
-                throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
-            }
+    private static void reportExpiration(boolean internal, Expired_Intent intent, long originalBudgetNanos) {
+        metrics.expired()
+                .cause(internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL)
+                .intent(intent)
+                .budget(budgetBucket(originalBudgetNanos))
+                .build()
+                .mark();
+
+        if (intent == Expired_Intent.THROW) {
+            throw internal ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
         }
     }
 
@@ -519,5 +608,18 @@ public final class Deadlines {
 
     interface Clock {
         long nanoTime();
+    }
+
+    private enum DeadlineSuppression implements CloseableDeadlineSuppression {
+        RESTORE_ON_CLOSE {
+            @Override
+            public void close() {
+                suppressed.remove();
+            }
+        },
+        ALREADY_SUPPRESSED {
+            @Override
+            public void close() {}
+        }
     }
 }

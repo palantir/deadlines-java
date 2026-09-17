@@ -32,12 +32,16 @@ import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.Detached;
 import com.palantir.tracing.DetachedSpan;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1136,6 +1140,239 @@ class DeadlinesTest {
             // Should record in sub-10s (original 5s budget), not any higher bucket
             assertThat(sub10sMeter.getCount()).isEqualTo(originalSub10s + 1);
             assertThat(sub100sMeter.getCount()).isEqualTo(originalSub100s);
+        }
+    }
+
+    @Test
+    public void suppress_deadline_hides_the_deadline_from_the_current_thread() {
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+                assertThat(Deadlines.getEnforcement()).isEmpty();
+            }
+
+            assertThat(Deadlines.getRemainingDeadline()).hasValue(Duration.ofSeconds(5));
+            assertThat(Deadlines.getEnforcement()).hasValue(Enforcement.ENFORCE);
+        }
+    }
+
+    @Test
+    public void suppress_deadline_encodes_the_proposed_deadline_without_reducing_it() {
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(30), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+            }
+
+            assertThat(outbound).containsEntry(DeadlinesHttpHeaders.EXPECT_WITHIN, "30.000");
+            assertThat(outbound).doesNotContainKey(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED);
+        }
+    }
+
+    @Test
+    public void suppress_deadline_does_not_enforce_an_expired_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+
+            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+                assertThatCode(() -> Deadlines.encodeToRequest(
+                                Duration.ofSeconds(30),
+                                new HashMap<>(),
+                                DummyRequestEncoder.INSTANCE,
+                                Enforcement.DEFER))
+                        .doesNotThrowAnyException();
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+            }
+
+            assertThatExceptionOfType(DeadlineExpiredException.Internal.class)
+                    .isThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER));
+        }
+    }
+
+    @Test
+    public void suppress_deadline_does_not_hide_the_deadline_from_other_threads_in_the_same_trace() throws Exception {
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            Detached sameTrace = DetachedSpan.detach();
+            CountDownLatch deadlineSuppressed = new CountDownLatch(1);
+            CountDownLatch deadlineRead = new CountDownLatch(1);
+            AtomicReference<Optional<Duration>> remainingOnOtherThread = new AtomicReference<>();
+
+            Thread otherThread = new Thread(() -> {
+                try (CloseableSpan ignored = sameTrace.childSpan("other")) {
+                    if (!deadlineSuppressed.await(10, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                    remainingOnOtherThread.set(Deadlines.getRemainingDeadline());
+                    deadlineRead.countDown();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            otherThread.start();
+
+            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+                deadlineSuppressed.countDown();
+                assertThat(deadlineRead.await(10, TimeUnit.SECONDS)).isTrue();
+            }
+            otherThread.join();
+
+            assertThat(remainingOnOtherThread.get()).hasValue(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
+    public void suppress_deadline_nests() {
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            try (CloseableDeadlineSuppression outer = Deadlines.suppressDeadline()) {
+                assertDeadlineIsSuppressedWithinNestedScope();
+                assertThat(Deadlines.getRemainingDeadline())
+                        .as("the inner scope must not restore the deadline while the outer scope is open")
+                        .isEmpty();
+            }
+
+            assertThat(Deadlines.getRemainingDeadline()).hasValue(Duration.ofSeconds(5));
+        }
+    }
+
+    private static void assertDeadlineIsSuppressedWithinNestedScope() {
+        try (CloseableDeadlineSuppression inner = Deadlines.suppressDeadline()) {
+            assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+        }
+    }
+
+    @Test
+    public void suppress_deadline_is_a_noop_when_no_deadline_is_set() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+            }
+            assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+        }
+    }
+
+    @Test
+    public void check_deadline_is_a_noop_when_no_deadline_is_set() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE)).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    public void check_deadline_is_a_noop_when_the_deadline_has_not_expired() {
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+            assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE)).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    public void check_deadline_throws_internal_for_an_expired_internal_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+
+            assertThatExceptionOfType(DeadlineExpiredException.Internal.class)
+                    .isThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER));
+        }
+    }
+
+    @Test
+    public void check_deadline_throws_external_for_an_expired_header_deadline() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, "5.000");
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+
+            assertThatExceptionOfType(DeadlineExpiredException.External.class)
+                    .isThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DEFER,ENFORCE,true", "ENFORCE,DEFER,true", "DEFER,DEFER,false", "ENFORCE,DISABLE,false"})
+    public void check_deadline_resolves_client_enforcement_against_trace_state(
+            Enforcement stateEnforcement, Enforcement clientEnforcement, boolean expectThrows) {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, stateEnforcement);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+
+            if (expectThrows) {
+                assertThatExceptionOfType(DeadlineExpiredException.class)
+                        .isThrownBy(() -> Deadlines.checkDeadline(clientEnforcement));
+            } else {
+                assertThatCode(() -> Deadlines.checkDeadline(clientEnforcement)).doesNotThrowAnyException();
+            }
+        }
+    }
+
+    @Test
+    public void check_deadline_records_an_ignored_expiration_when_not_enforced() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+
+            @SuppressWarnings("for-rollout:deprecation")
+            DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
+            Meter ignoredMeter = metrics.expired()
+                    .cause(Expired_Cause.INTERNAL)
+                    .intent(Expired_Intent.IGNORE)
+                    .budget(Expired_Budget.SUB_10S)
+                    .build();
+            long originalCount = ignoredMeter.getCount();
+
+            Deadlines.checkDeadline(Enforcement.DEFER);
+
+            assertThat(ignoredMeter.getCount()).isEqualTo(originalCount + 1);
+        }
+    }
+
+    @Test
+    public void check_deadline_is_a_noop_when_further_propagation_is_disabled() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+            clock.elapsed += Duration.ofSeconds(6).toNanos();
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE)).doesNotThrowAnyException();
         }
     }
 
