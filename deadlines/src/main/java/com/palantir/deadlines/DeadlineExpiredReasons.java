@@ -51,16 +51,22 @@ public final class DeadlineExpiredReasons {
         }
     }
 
-    public interface ResponseEncodingAdapter<RESPONSE> {
-        void setHeader(RESPONSE response, String headerName, String headerValue);
-
+    /** Writes the expiration onto a response, in addition to setting its status. */
+    public interface ResponseEncodingAdapter<RESPONSE> extends HeaderWriter<RESPONSE> {
         void setStatus(RESPONSE response, int status);
     }
 
-    public interface ResponseDecodingAdapter<RESPONSE> {
+    /** Reads the expiration from a response, in addition to reading its status. */
+    public interface ResponseDecodingAdapter<RESPONSE> extends HeaderReader<RESPONSE> {
         @Nullable
         String maybeFirstHeader(RESPONSE response, String headerName);
 
         int getStatus(RESPONSE response);
+
+        @Override
+        @Nullable
+        default String firstHeader(RESPONSE response, String headerName) {
+            return maybeFirstHeader(response, headerName);
+        }
     }
 }

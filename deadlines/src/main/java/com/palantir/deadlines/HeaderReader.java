@@ -16,15 +16,17 @@
 
 package com.palantir.deadlines;
 
-import java.io.Closeable;
+import javax.annotation.Nullable;
 
 /**
- * Restores visibility of the current trace's deadline on the current thread when closed.
+ * Reads a header from a request or response of the consumer's own type.
  *
- * @see Deadlines#suppressDeadline()
+ * @param <T> the request or response type to read from
  */
-public interface CloseableDeadlineSuppression extends Closeable {
+@FunctionalInterface
+public interface HeaderReader<T> {
 
-    @Override
-    void close();
+    /** The first value of the named header, or null if the header is absent. */
+    @Nullable
+    String firstHeader(T source, String headerName);
 }

@@ -16,68 +16,81 @@
 
 package com.palantir.deadlines;
 
+import com.palantir.deadlines.Deadline.Origin;
 import com.palantir.logsafe.Arg;
 import com.palantir.logsafe.Safe;
+import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.SafeLoggable;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Indicates that a deadline has expired.
+ * <p>
+ * When thrown by this library the exception carries the budget the request started with and how much time had
+ * actually elapsed. Those are not the same number, because deadline expiration does not interrupt work in progress:
+ * the elapsed time says how far past the budget the request had run by the time something noticed.
  */
 public abstract sealed class DeadlineExpiredException extends RuntimeException implements SafeLoggable {
     private static final List<Arg<?>> EMPTY_ARGS = List.of();
 
-    private DeadlineExpiredException(String message) {
+    private final String logMessage;
+    private final List<Arg<?>> args;
+
+    private DeadlineExpiredException(String message, List<Arg<?>> args) {
         super(message);
+        this.logMessage = message;
+        this.args = args;
     }
 
     public static External external() {
-        return new External();
+        return new External(EMPTY_ARGS);
     }
 
     public static Internal internal() {
-        return new Internal();
+        return new Internal(EMPTY_ARGS);
+    }
+
+    static DeadlineExpiredException of(Origin origin, long budgetNanos, long elapsedNanos) {
+        List<Arg<?>> args = List.of(
+                SafeArg.of("deadlineMillis", TimeUnit.NANOSECONDS.toMillis(budgetNanos)),
+                SafeArg.of("elapsedMillis", TimeUnit.NANOSECONDS.toMillis(elapsedNanos)),
+                SafeArg.of("origin", origin));
+        return switch (origin) {
+            case INTERNAL -> new Internal(args);
+            case EXTERNAL -> new External(args);
+        };
+    }
+
+    @Override
+    public final @Safe String getLogMessage() {
+        return logMessage;
+    }
+
+    @Override
+    public final List<Arg<?>> getArgs() {
+        return args;
     }
 
     /**
      * Indicates that a deadline has expired due to a server being unable to meet an externally provided deadline.
      */
-    public static final class External extends DeadlineExpiredException implements SafeLoggable {
+    public static final class External extends DeadlineExpiredException {
         private static final String MESSAGE = "An externally provided deadline for completing work has expired.";
 
-        private External() {
-            super(MESSAGE);
-        }
-
-        @Override
-        public @Safe String getLogMessage() {
-            return MESSAGE;
-        }
-
-        @Override
-        public List<Arg<?>> getArgs() {
-            return EMPTY_ARGS;
+        private External(List<Arg<?>> args) {
+            super(MESSAGE, args);
         }
     }
 
     /**
      * Indicates that a deadline has expired due to a server being unable to meet an internally-imposed deadline.
      */
-    public static final class Internal extends DeadlineExpiredException implements SafeLoggable {
+    public static final class Internal extends DeadlineExpiredException {
         private static final String MESSAGE = "An internal deadline for completing work has expired.";
 
-        private Internal() {
-            super(MESSAGE);
-        }
-
-        @Override
-        public @Safe String getLogMessage() {
-            return MESSAGE;
-        }
-
-        @Override
-        public List<Arg<?>> getArgs() {
-            return EMPTY_ARGS;
+        private Internal(List<Arg<?>> args) {
+            super(MESSAGE, args);
         }
     }
 }

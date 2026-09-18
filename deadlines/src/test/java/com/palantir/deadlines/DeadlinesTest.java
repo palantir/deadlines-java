@@ -43,6 +43,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -50,41 +51,58 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.quicktheories.core.Gen;
 import org.quicktheories.generators.Generate;
 
+/**
+ * Exercises the deprecated static surface, which now delegates to {@link Deadline} and the methods that replaced it.
+ * <p>
+ * These tests are deliberately left on the deprecated API: unchanged, they are the evidence that consumers still on
+ * it see no behaviour change. {@link DeadlineTest} covers the replacement surface. The suppressions stop
+ * {@code -PerrorProneApply} from migrating the calls and taking that evidence with it.
+ */
+@SuppressWarnings({"deprecation", "InlineMeInliner"})
 class DeadlinesTest {
+
+    /**
+     * The clock is a static, so a test which freezes it and does not restore it leaves every test that runs
+     * afterwards reading a frozen clock. That made this suite order-dependent and unsafe to parallelize.
+     */
+    @AfterEach
+    void restoreClock() {
+        Deadlines.resetClock();
+    }
 
     @Test
     public void test_duration_to_header_value_avoids_encoding_negative_values() {
         long duration = Duration.ofMillis(-2).toNanos();
-        String headerValue = Deadlines.durationToHeaderValue(duration);
+        String headerValue = ExpectWithinHeader.format(duration);
         assertThat(headerValue).isEqualTo("0");
     }
 
     @Test
     public void test_duration_to_header_value_ceiling_on_millis() {
-        assertThat(Deadlines.durationToHeaderValue(1)).isEqualTo("0.001");
-        assertThat(Deadlines.durationToHeaderValue(1000001)).isEqualTo("0.002");
-        assertThat(Deadlines.durationToHeaderValue(1999999)).isEqualTo("0.002");
-        assertThat(Deadlines.durationToHeaderValue(9999999)).isEqualTo("0.010");
-        assertThat(Deadlines.durationToHeaderValue(10000001)).isEqualTo("0.011");
-        assertThat(Deadlines.durationToHeaderValue(19999999)).isEqualTo("0.020");
-        assertThat(Deadlines.durationToHeaderValue(99999999)).isEqualTo("0.100");
-        assertThat(Deadlines.durationToHeaderValue(1000000001)).isEqualTo("1.001");
-        assertThat(Deadlines.durationToHeaderValue(1999999999)).isEqualTo("2.000");
+        assertThat(ExpectWithinHeader.format(1)).isEqualTo("0.001");
+        assertThat(ExpectWithinHeader.format(1000001)).isEqualTo("0.002");
+        assertThat(ExpectWithinHeader.format(1999999)).isEqualTo("0.002");
+        assertThat(ExpectWithinHeader.format(9999999)).isEqualTo("0.010");
+        assertThat(ExpectWithinHeader.format(10000001)).isEqualTo("0.011");
+        assertThat(ExpectWithinHeader.format(19999999)).isEqualTo("0.020");
+        assertThat(ExpectWithinHeader.format(99999999)).isEqualTo("0.100");
+        assertThat(ExpectWithinHeader.format(1000000001)).isEqualTo("1.001");
+        assertThat(ExpectWithinHeader.format(1999999999)).isEqualTo("2.000");
     }
 
     @Test
     public void test_duration_to_header_value_avoids_overflow() {
         long duration = Long.MAX_VALUE;
         long expected = 9223372036853999616L;
-        String headerValue = Deadlines.durationToHeaderValue(duration);
-        Long parsed = Deadlines.tryParseSecondsToNanoseconds(headerValue);
+        String headerValue = ExpectWithinHeader.format(duration);
+        Long parsed = ExpectWithinHeader.parse(headerValue);
         assertThat(parsed).isEqualTo(expected);
     }
 
     @Test
     public void test_duration_to_header_value() {
         long duration = Duration.ofMillis(1523).toNanos();
-        String headerValue = Deadlines.durationToHeaderValue(duration);
+        String headerValue = ExpectWithinHeader.format(duration);
         assertThat(headerValue).isEqualTo("1.523");
     }
 
@@ -108,7 +126,7 @@ class DeadlinesTest {
         "12345678901234678901234678901234678901234678901234678901234678901.123467890123467890, 9223372036854775807",
     })
     public void test_header_value_to_duration(String input, long expectedNanos) {
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(input))
+        assertThat(ExpectWithinHeader.parse(input))
                 .isNotNull()
                 .isEqualTo(expectedNanos)
                 .isEqualTo((long) (Double.parseDouble(input) * 1_000_000_000.0));
@@ -152,22 +170,22 @@ class DeadlinesTest {
                 "0x123", // Hexadecimal notation
             })
     public void test_invalid_header_value_to_duration(String headerValue) {
-        assertThat(Deadlines.tryParseSecondsToNanoseconds(headerValue)).isNull();
+        assertThat(ExpectWithinHeader.parse(headerValue)).isNull();
     }
 
     @Test
     void check_tryParseSecondsToNanoseconds_successfully_parses_numeric_values() {
         Gen<String> numericStringGen = stringGen("0123456789", 1, 100);
         qt().withExamples(100_000).forAll(numericStringGen, numericStringGen).checkAssert((integer, decimal) -> {
-            assertThat(Deadlines.tryParseSecondsToNanoseconds(integer))
+            assertThat(ExpectWithinHeader.parse(integer))
                     .isNotNull()
                     .isGreaterThanOrEqualTo(0)
                     .isLessThanOrEqualTo(Long.MAX_VALUE);
-            assertThat(Deadlines.tryParseSecondsToNanoseconds(decimal))
+            assertThat(ExpectWithinHeader.parse(decimal))
                     .isNotNull()
                     .isGreaterThanOrEqualTo(0)
                     .isLessThanOrEqualTo(Long.MAX_VALUE);
-            assertThat(Deadlines.tryParseSecondsToNanoseconds(integer + '.' + decimal))
+            assertThat(ExpectWithinHeader.parse(integer + '.' + decimal))
                     .isNotNull()
                     .isGreaterThanOrEqualTo(0)
                     .isLessThanOrEqualTo(Long.MAX_VALUE);
@@ -180,8 +198,8 @@ class DeadlinesTest {
                 stringGen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\n\r", 0, 100);
         qt().withExamples(100_000)
                 .forAll(stringGen)
-                .checkAssert(input -> assertThatCode(() -> Deadlines.tryParseSecondsToNanoseconds(input))
-                        .doesNotThrowAnyException());
+                .checkAssert(input ->
+                        assertThatCode(() -> ExpectWithinHeader.parse(input)).doesNotThrowAnyException());
     }
 
     private static Gen<String> stringGen(String validChars, int minLength, int maxLength) {
@@ -203,7 +221,7 @@ class DeadlinesTest {
 
             assertThat(Optional.ofNullable(request.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(s -> {
-                        String expected = Deadlines.durationToHeaderValue(deadline.toNanos());
+                        String expected = ExpectWithinHeader.format(deadline.toNanos());
                         assertThat(s).isEqualTo(expected);
                     });
         }
@@ -214,8 +232,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
@@ -228,7 +245,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> inboundRequest = new HashMap<>();
             long originalDeadline = Duration.ofSeconds(1).toNanos();
-            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(originalDeadline));
+            inboundRequest.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(originalDeadline));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
@@ -242,7 +259,7 @@ class DeadlinesTest {
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
-                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                        Long parsed = ExpectWithinHeader.parse(h);
                         assertThat(parsed).isNotNull().isLessThanOrEqualTo(originalDeadline);
                     });
         }
@@ -254,7 +271,7 @@ class DeadlinesTest {
             Map<String, String> inboundRequest = new HashMap<>();
             inboundRequest.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(2).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(2).toNanos()));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
@@ -268,7 +285,7 @@ class DeadlinesTest {
 
             assertThat(Optional.ofNullable(outboundRequest.get(DeadlinesHttpHeaders.EXPECT_WITHIN)))
                     .hasValueSatisfying(h -> {
-                        Long parsed = Deadlines.tryParseSecondsToNanoseconds(h);
+                        Long parsed = ExpectWithinHeader.parse(h);
                         assertThat(parsed).isLessThanOrEqualTo(providedDeadline.toNanos());
                     });
         }
@@ -280,7 +297,7 @@ class DeadlinesTest {
             Map<String, String> inboundRequest = new HashMap<>();
             inboundRequest.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(2).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(2).toNanos()));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
@@ -316,7 +333,7 @@ class DeadlinesTest {
     public void parse_from_request_noop_when_no_trace() {
         Map<String, String> request = new HashMap<>();
         Duration providedDeadline = Duration.ofSeconds(1);
-        request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+        request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
         Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
         assertThat(Deadlines.getRemainingDeadline()).isEmpty();
     }
@@ -328,8 +345,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             clock.elapsed += 2_000_000;
@@ -346,8 +362,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             clock.elapsed += 2_000_000;
@@ -386,8 +401,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(100);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofMillis(1)), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
@@ -426,8 +440,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             clock.elapsed += 2_000_000;
@@ -481,8 +494,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             clock.elapsed += 500_000_000;
@@ -535,8 +547,7 @@ class DeadlinesTest {
             // the first hop receives a valid, non-zero deadline on the wire
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
             // nothing yet...
             assertThat(expiredMeterPropagateIntent.getCount()).isEqualTo(expiredMeterPropagateIntentValue);
@@ -583,8 +594,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             clock.elapsed += 2_000_000;
@@ -614,8 +624,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             clock.elapsed += 2_000_000;
@@ -634,8 +643,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -655,8 +663,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofMillis(1);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
@@ -680,8 +687,7 @@ class DeadlinesTest {
         try (CloseableSpan ignored = server1Span.attach()) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             clock.elapsed += 500_000_000;
@@ -711,8 +717,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             Map<String, String> outbound = new HashMap<>();
@@ -729,8 +734,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
@@ -747,8 +751,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -766,8 +769,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
@@ -785,8 +787,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
             Deadlines.parseFromRequest(Optional.empty(), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -855,8 +856,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "foobar");
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
@@ -875,8 +875,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "foobar");
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
@@ -895,8 +894,7 @@ class DeadlinesTest {
         try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
             Map<String, String> inbound1 = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(1);
-            inbound1.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             inbound1.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "foobar");
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(10)), inbound1, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
@@ -915,7 +913,7 @@ class DeadlinesTest {
             Map<String, String> inboundRequest = new HashMap<>();
             inboundRequest.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(2).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(2).toNanos()));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -947,7 +945,7 @@ class DeadlinesTest {
             Map<String, String> inboundRequest = new HashMap<>();
             inboundRequest.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(2).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(2).toNanos()));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
@@ -969,7 +967,7 @@ class DeadlinesTest {
             Map<String, String> inboundRequest = new HashMap<>();
             inboundRequest.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(0).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(0).toNanos()));
             Deadlines.parseFromRequest(
                     Optional.empty(), inboundRequest, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -996,7 +994,7 @@ class DeadlinesTest {
             Map<String, String> request = new HashMap<>();
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
@@ -1009,7 +1007,7 @@ class DeadlinesTest {
             Map<String, String> request = new HashMap<>();
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
             assertThat(Deadlines.getEnforcement()).contains(Enforcement.DEFER);
@@ -1022,7 +1020,7 @@ class DeadlinesTest {
             Map<String, String> request = new HashMap<>();
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
@@ -1035,7 +1033,7 @@ class DeadlinesTest {
             Map<String, String> request = new HashMap<>();
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
             request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "true");
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
 
@@ -1049,7 +1047,7 @@ class DeadlinesTest {
             Map<String, String> request = new HashMap<>();
             request.put(
                     DeadlinesHttpHeaders.EXPECT_WITHIN,
-                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                    ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
             request.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false");
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
@@ -1063,7 +1061,7 @@ class DeadlinesTest {
         Map<String, String> request = new HashMap<>();
         request.put(
                 DeadlinesHttpHeaders.EXPECT_WITHIN,
-                Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+                ExpectWithinHeader.format(Duration.ofSeconds(1).toNanos()));
         Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
         // Without a trace, deadline state won't be set
@@ -1112,8 +1110,7 @@ class DeadlinesTest {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Map<String, String> request = new HashMap<>();
             Duration providedDeadline = Duration.ofSeconds(5);
-            request.put(
-                    DeadlinesHttpHeaders.EXPECT_WITHIN, Deadlines.durationToHeaderValue(providedDeadline.toNanos()));
+            request.put(DeadlinesHttpHeaders.EXPECT_WITHIN, ExpectWithinHeader.format(providedDeadline.toNanos()));
             Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.DISABLE);
 
             clock.elapsed += 11_000_000_000L;
@@ -1150,7 +1147,7 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
-            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope ignored = Deadlines.suppressDeadline()) {
                 assertThat(Deadlines.getRemainingDeadline()).isEmpty();
                 assertThat(Deadlines.getEnforcement()).isEmpty();
             }
@@ -1168,7 +1165,7 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
             Map<String, String> outbound = new HashMap<>();
-            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope ignored = Deadlines.suppressDeadline()) {
                 Deadlines.encodeToRequest(
                         Duration.ofSeconds(30), outbound, DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
             }
@@ -1187,7 +1184,7 @@ class DeadlinesTest {
                     Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
             clock.elapsed += Duration.ofSeconds(6).toNanos();
 
-            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope ignored = Deadlines.suppressDeadline()) {
                 assertThatCode(() -> Deadlines.encodeToRequest(
                                 Duration.ofSeconds(30),
                                 new HashMap<>(),
@@ -1228,7 +1225,7 @@ class DeadlinesTest {
             });
             otherThread.start();
 
-            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope ignored = Deadlines.suppressDeadline()) {
                 deadlineSuppressed.countDown();
                 assertThat(deadlineRead.await(10, TimeUnit.SECONDS)).isTrue();
             }
@@ -1245,7 +1242,7 @@ class DeadlinesTest {
             Deadlines.parseFromRequest(
                     Optional.of(Duration.ofSeconds(5)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
 
-            try (CloseableDeadlineSuppression outer = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope outer = Deadlines.suppressDeadline()) {
                 assertDeadlineIsSuppressedWithinNestedScope();
                 assertThat(Deadlines.getRemainingDeadline())
                         .as("the inner scope must not restore the deadline while the outer scope is open")
@@ -1257,7 +1254,7 @@ class DeadlinesTest {
     }
 
     private static void assertDeadlineIsSuppressedWithinNestedScope() {
-        try (CloseableDeadlineSuppression inner = Deadlines.suppressDeadline()) {
+        try (CloseableDeadlineScope inner = Deadlines.suppressDeadline()) {
             assertThat(Deadlines.getRemainingDeadline()).isEmpty();
         }
     }
@@ -1265,7 +1262,7 @@ class DeadlinesTest {
     @Test
     public void suppress_deadline_is_a_noop_when_no_deadline_is_set() {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
-            try (CloseableDeadlineSuppression ignored = Deadlines.suppressDeadline()) {
+            try (CloseableDeadlineScope ignored = Deadlines.suppressDeadline()) {
                 assertThat(Deadlines.getRemainingDeadline()).isEmpty();
             }
             assertThat(Deadlines.getRemainingDeadline()).isEmpty();
@@ -1373,6 +1370,46 @@ class DeadlinesTest {
             Deadlines.disableFurtherDeadlinePropagation();
 
             assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE)).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    public void an_exhausted_budget_of_this_servers_own_expires_as_internal() {
+        // Regression test. The expiration paths for a caller's own proposed budget hardcoded the cause as external,
+        // so a server that had used up the budget it granted itself reported its caller as being at fault, and
+        // surfaced a 400 rather than a 500.
+        Deadlines.setClock(new TestClock());
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            assertThat(Deadlines.getRemainingDeadline())
+                    .as("no deadline was received, so only this server's own proposal can bind")
+                    .isEmpty();
+
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ZERO, new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE))
+                    .isInstanceOf(DeadlineExpiredException.Internal.class);
+        }
+    }
+
+    @Test
+    public void disabling_propagation_stops_enforcement_even_for_an_enforcing_client() {
+        // Regression test. Disabling propagation set the stored strategy to DEFER, intending to suppress
+        // enforcement, but DEFER is the identity of Enforcement#resolveWith rather than its absorbing element: it
+        // yields to the other side. An enforcing client therefore still threw, which defeated the whole purpose of
+        // disabling propagation for work that has to outlive the request.
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.of(Duration.ofSeconds(1)), Map.of(), DummyRequestDecoder.INSTANCE, Enforcement.DEFER);
+            clock.elapsed += Duration.ofSeconds(2).toNanos();
+
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            Map<String, String> outbound = new HashMap<>();
+            assertThatCode(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE))
+                    .doesNotThrowAnyException();
+            assertThat(outbound).isEmpty();
         }
     }
 

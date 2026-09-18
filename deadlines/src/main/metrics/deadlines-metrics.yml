@@ -5,6 +5,80 @@ namespaces:
   deadline:
     docs: Metrics for deadlines.
     metrics:
+      received:
+        type: meter
+        docs: Marked every time a deadline is established for a request, whether it was
+              read from a request header or imposed by this server. This is the
+              denominator for `deadline.expired`; without it an expiration count cannot
+              be turned into an expiration rate.
+        tags:
+          - name: origin
+            docs: Identifies which value became the deadline for the request.
+            values:
+              - value: internal
+                docs: The deadline was imposed by this server, either because no
+                      deadline was received on the wire or because the server's own
+                      budget was smaller than the one received.
+              - value: external
+                docs: The deadline was read from a request header.
+          - name: enforcement
+            docs: The enforcement strategy established for the request.
+            values:
+              - value: enforce
+                docs: Expirations will throw, and enforcement is requested downstream.
+              - value: defer
+                docs: Expirations will not throw at this node.
+              - value: disable
+                docs: Expirations will not throw here or at any downstream node.
+          - name: state
+            docs: Whether the deadline had any budget left when it was established.
+            values:
+              - value: live
+                docs: The deadline had budget remaining when it was established.
+              - value: expired-on-arrival
+                docs: The deadline was already expired when it was established, meaning
+                      an upstream node propagated an expired deadline rather than
+                      failing the request itself.
+      budget:
+        type: histogram
+        docs: The total deadline budget, in milliseconds, recorded once per request that
+              establishes a deadline. Replaces the bucketed `budget` tag on
+              `deadline.expired` with a real distribution, so questions such as the
+              median received budget can be answered.
+        tags:
+          - name: origin
+            docs: Identifies which value became the deadline for the request.
+            values:
+              - value: internal
+                docs: The deadline was imposed by this server.
+              - value: external
+                docs: The deadline was read from a request header.
+      headroom:
+        type: histogram
+        docs: Budget remaining, in milliseconds, when the inbound request finished,
+              clamped at zero. Recorded by `Deadlines.requestCompleted()`. Together with
+              `deadline.expired` this shows how close requests run to their deadline,
+              making near-misses visible before they become expirations.
+      revoked:
+        type: meter
+        docs: Marked when a deadline stops applying to a request before it expires.
+              Nothing recorded this previously, so a request that mysteriously ignored
+              its deadline left no evidence of why.
+        tags:
+          - name: reason
+            docs: Why the deadline stopped applying.
+            values:
+              - value: request-completed
+                docs: The inbound request finished, so work outliving it is no longer
+                      bound by its deadline.
+              - value: caller
+                docs: A caller explicitly revoked the deadline.
+      detached:
+        type: meter
+        docs: Marked when a scope replaces or hides the request's deadline, whether to
+              grant a fresh budget to work that must outlive the request or to stop
+              work shared between several callers being bound by whichever of them
+              happened to start it. Makes both cases visible rather than silent.
       expired:
         type: meter
         tags:
