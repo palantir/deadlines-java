@@ -77,6 +77,32 @@ public final class Deadlines {
     }
 
     /**
+     * Throws a {@link DeadlineExpiredException} if the current trace deadline has expired and is enforced, recording
+     * the expiration in the {@code deadline.expired} meter.
+     * <p>
+     * This is the counterpart to the check {@link #encodeToRequest} performs, for callers that need to enforce a
+     * deadline at a point where they are not sending a request -- for example when work that was waiting on a
+     * deadline-bounded budget is about to give up. It is a no-op when no deadline is present, when the deadline has
+     * not yet expired, or when further propagation has been disabled for this trace.
+     *
+     * @param clientEnforcement the caller's requested strategy, resolved against the trace's stored strategy using
+     *     {@link Enforcement#resolveWith(Enforcement)}
+     */
+    public static void checkDeadline(Enforcement clientEnforcement) {
+        ProvidedDeadline stateDeadline = deadlineState.get();
+        if (stateDeadline == null || stateDeadline.disablePropagation()) {
+            // The deadline no longer applies to this trace, so its expiry is not an event worth reporting.
+            return;
+        }
+        checkExpiration(
+                stateDeadline.remainingNanos(getClockNanoTime()),
+                stateDeadline.internal(),
+                stateDeadline.disablePropagation(),
+                stateDeadline.alreadyExpired(),
+                stateDeadline.enforcement().resolveWith(clientEnforcement) == Enforcement.ENFORCE);
+    }
+
+    /**
      * Get the enforcement strategy for the current deadline.
      * <p>
      * Queries the current deadline state from a TraceLocal, and returns the {@link Enforcement}
@@ -100,7 +126,8 @@ public final class Deadlines {
      * Further calls to {@link #encodeToRequest} will result in a no-op assuming a deadline has previously been
      * set for this trace (e.g. via a previous call to {@link #parseFromRequest}).
      * <p>
-     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}.
+     * Further calls to {@link #getRemainingDeadline} will return {@link Optional#empty()}, and
+     * {@link #checkDeadline} becomes a no-op.
      */
     public static void disableFurtherDeadlinePropagation() {
         ProvidedDeadline currentState = deadlineState.get();
