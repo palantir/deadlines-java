@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.google.errorprone.annotations.InlineMe;
+import com.google.errorprone.annotations.MustBeClosed;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Cause;
 import com.palantir.deadlines.DeadlineMetrics.Expired_Intent;
 import com.palantir.logsafe.SafeArg;
@@ -43,6 +44,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
+    private static final ThreadLocal<Boolean> suppressed = new ThreadLocal<>();
 
     @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
@@ -53,19 +55,54 @@ public final class Deadlines {
     private static Clock clock = System::nanoTime;
 
     /**
+     * Ignores the current trace's deadline and enforcement strategy on the calling thread.
+     * {@link #getRemainingDeadline()} and {@link #getEnforcement()} return empty while suppressed, and
+     * {@link #encodeToRequest} uses only the client-proposed deadline and enforcement strategy.
+     * The deadline stored on the trace is unchanged.
+     * <p>
+     * Use the returned scope in a try-with-resources statement. Suppression is not propagated to other threads, including through tracing wrappers. Asynchronous clients must
+     * capture {@link #isSuppressed()} when a call starts and honor that value during queued execution and retries.
+     */
+    @MustBeClosed
+    public static Suppression suppress() {
+        Boolean previous = suppressed.get();
+        suppressed.set(Boolean.TRUE);
+        return () -> {
+            if (previous == null) {
+                suppressed.remove();
+            } else {
+                suppressed.set(previous);
+            }
+        };
+    }
+
+    /** Returns whether the current thread is suppressing inherited deadlines, even if no trace is active. */
+    public static boolean isSuppressed() {
+        return Boolean.TRUE.equals(suppressed.get());
+    }
+
+    /** A thread-local scope created by {@link #suppress()}. */
+    public interface Suppression extends AutoCloseable {
+        /** Restores the suppression state that preceded this scope. */
+        @Override
+        void close();
+    }
+
+    /**
      * Get the amount of time remaining for the current deadline.
      * <p>
      * Queries the current deadline state from a TraceLocal, and returns a {@link Duration} for the
      * amount of time remaining towards that deadline. If the deadline has already expired, then
      * {@link Duration#ZERO} is returned.
      * <p>
-     * If no deadline state has been set for the current trace, return an empty Optional.
+     * If no deadline state has been set for the current trace, or {@link #isSuppressed()} is true,
+     * return an empty Optional.
      *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
-     * has expired, or {@link Optional#empty()} if no such deadline state exists.
+     * has expired, or {@link Optional#empty()} if no such deadline state exists or it is suppressed.
      */
     public static Optional<Duration> getRemainingDeadline() {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        ProvidedDeadline stateDeadline = getEffectiveDeadline();
         if (stateDeadline == null) {
             return Optional.empty();
         }
@@ -108,13 +145,14 @@ public final class Deadlines {
      * Queries the current deadline state from a TraceLocal, and returns the {@link Enforcement}
      * strategy that was configured when the deadline was parsed or set.
      * <p>
-     * If no deadline state has been set for the current trace, return an empty Optional.
+     * If no deadline state has been set for the current trace, or {@link #isSuppressed()} is true,
+     * return an empty Optional.
      *
      * @return the enforcement strategy for the current trace, or {@link Optional#empty()} if no such
-     * deadline state exists.
+     * deadline state exists or it is suppressed.
      */
     public static Optional<Enforcement> getEnforcement() {
-        return Optional.ofNullable(deadlineState.get()).map(ProvidedDeadline::enforcement);
+        return Optional.ofNullable(getEffectiveDeadline()).map(ProvidedDeadline::enforcement);
     }
 
     /**
@@ -151,6 +189,7 @@ public final class Deadlines {
      *   - the value returned by {@link #getRemainingDeadline()}} if it exists
      * This ensures that the deadline set for the request will be based on the remaining deadline from
      * already-set internal state, or a smaller one if the caller chooses that.
+     * When {@link #isSuppressed()} is true, only the proposed deadline and client enforcement strategy are used.
      * <p>
      * This function has no side effects on the internal deadline state stored in a TraceLocal.
      * <p>
@@ -172,7 +211,7 @@ public final class Deadlines {
             T request,
             RequestEncodingAdapter<? super T> adapter,
             Enforcement clientEnforcement) {
-        ProvidedDeadline stateDeadline = deadlineState.get();
+        ProvidedDeadline stateDeadline = getEffectiveDeadline();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
@@ -386,6 +425,11 @@ public final class Deadlines {
         parseFromRequest(internalDeadline, request, adapter, Enforcement.DEFER);
     }
 
+    @Nullable
+    private static ProvidedDeadline getEffectiveDeadline() {
+        return isSuppressed() ? null : deadlineState.get();
+    }
+
     private static void storeDeadline(long deadline, boolean internal, Enforcement enforcement) {
         ProvidedDeadline providedDeadline =
                 new ProvidedDeadline(deadline, getClockNanoTime(), internal, false, enforcement);
@@ -414,7 +458,7 @@ public final class Deadlines {
 
             // Record the original deadline budget bucket. If state exists, use the original
             // value stored at parse time; otherwise the deadline arg itself is the original budget.
-            ProvidedDeadline state = deadlineState.get();
+            ProvidedDeadline state = getEffectiveDeadline();
             long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
 
             metrics.expired()
