@@ -43,7 +43,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     private static final TraceLocal<ProvidedDeadline> deadlineState = TraceLocal.of();
-    private static final ThreadLocal<Boolean> suppressed = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> enforcementDisabled = new ThreadLocal<>();
 
     @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
@@ -54,29 +54,42 @@ public final class Deadlines {
     private static Clock clock = System::nanoTime;
 
     /**
-     * Runs the callback while ignoring inherited deadlines and enforcement on the calling thread.
-     * Client-proposed deadlines still apply, and the previous suppression state is restored when the callback exits.
+     * Runs the callback with deadline enforcement overridden to {@link Enforcement#DISABLE} on the calling thread,
+     * as though every deadline operation in the callback had requested {@link Enforcement#DISABLE}.
+     * <p>
+     * The deadline value itself is unaffected: {@link #getRemainingDeadline()} still reports the time remaining and
+     * {@link #encodeToRequest} still propagates the minimum of the remaining and proposed deadlines. Only enforcement
+     * changes -- expirations do not throw, and outbound requests carry
+     * {@link DeadlinesHttpHeaders#EXPECT_WITHIN_ENFORCED} set to "false", which disables enforcement downstream as
+     * well. The previous state is restored when the callback exits.
      * <p>
      * <strong>WARNING: The callback must run synchronously. Do not start new threads or schedule asynchronous work.</strong>
-     * Suppression is not automatically propagated to other threads or deferred callbacks.
+     * The override is not automatically propagated to other threads or deferred callbacks; those should pass
+     * {@link Enforcement#DISABLE} to {@link #encodeToRequest} instead.
      */
-    public static void withoutInheritedDeadlines(Runnable runnable) {
-        Boolean previous = suppressed.get();
-        suppressed.set(Boolean.TRUE);
+    public static void withEnforcementDisabled(Runnable runnable) {
+        Boolean previous = enforcementDisabled.get();
+        enforcementDisabled.set(Boolean.TRUE);
         try {
             runnable.run();
         } finally {
             if (previous == null) {
-                suppressed.remove();
+                enforcementDisabled.remove();
             } else {
-                suppressed.set(previous);
+                enforcementDisabled.set(previous);
             }
         }
     }
 
-    /** Returns whether the current thread is suppressing inherited deadlines, even if no trace is active. */
-    public static boolean isSuppressed() {
-        return Boolean.TRUE.equals(suppressed.get());
+    /**
+     * Returns whether {@link #withEnforcementDisabled} has overridden enforcement for the calling thread, even when
+     * no trace or deadline is present.
+     * <p>
+     * Callers that hand work to another thread can read this while the scope is open and apply the result there by
+     * passing {@link Enforcement#DISABLE} to {@link #encodeToRequest}, which no stored strategy can override.
+     */
+    public static boolean isEnforcementDisabled() {
+        return Boolean.TRUE.equals(enforcementDisabled.get());
     }
 
     /**
@@ -86,14 +99,13 @@ public final class Deadlines {
      * amount of time remaining towards that deadline. If the deadline has already expired, then
      * {@link Duration#ZERO} is returned.
      * <p>
-     * If no deadline state has been set for the current trace, or {@link #isSuppressed()} is true,
-     * return an empty Optional.
+     * If no deadline state has been set for the current trace, return an empty Optional.
      *
      * @return the remaining deadline time for the current trace, or {@link Duration#ZERO} if the deadline
-     * has expired, or {@link Optional#empty()} if no such deadline state exists or it is suppressed.
+     * has expired, or {@link Optional#empty()} if no such deadline state exists.
      */
     public static Optional<Duration> getRemainingDeadline() {
-        ProvidedDeadline stateDeadline = getEffectiveDeadline();
+        ProvidedDeadline stateDeadline = deadlineState.get();
         if (stateDeadline == null) {
             return Optional.empty();
         }
@@ -111,13 +123,13 @@ public final class Deadlines {
      * This is the counterpart to the check {@link #encodeToRequest} performs, for callers that need to enforce a
      * deadline at a point where they are not sending a request -- for example when work that was waiting on a
      * deadline-bounded budget is about to give up. It is a no-op when no deadline is present, when the deadline has
-     * not yet expired, when it is suppressed, or when further propagation has been disabled for this trace.
+     * not yet expired, when enforcement is disabled, or when further propagation has been disabled for this trace.
      *
      * @param clientEnforcement the caller's requested strategy, resolved against the trace's stored strategy using
      *     {@link Enforcement#resolveWith(Enforcement)}
      */
     public static void checkDeadline(Enforcement clientEnforcement) {
-        ProvidedDeadline stateDeadline = getEffectiveDeadline();
+        ProvidedDeadline stateDeadline = deadlineState.get();
         if (stateDeadline == null || stateDeadline.disablePropagation()) {
             // The deadline no longer applies to this trace, so its expiry is not an event worth reporting.
             return;
@@ -127,24 +139,24 @@ public final class Deadlines {
                 stateDeadline.internal(),
                 stateDeadline.disablePropagation(),
                 stateDeadline.alreadyExpired(),
-                stateDeadline.enforcement().resolveWith(clientEnforcement) == Enforcement.ENFORCE,
-                stateDeadline.valueNanos());
+                resolveEnforcement(stateDeadline.enforcement(), clientEnforcement) == Enforcement.ENFORCE);
     }
 
     /**
      * Get the enforcement strategy for the current deadline.
      * <p>
      * Queries the current deadline state from a TraceLocal, and returns the {@link Enforcement}
-     * strategy that was configured when the deadline was parsed or set.
+     * strategy that was configured when the deadline was parsed or set, or {@link Enforcement#DISABLE} while
+     * running inside {@link #withEnforcementDisabled}.
      * <p>
-     * If no deadline state has been set for the current trace, or {@link #isSuppressed()} is true,
-     * return an empty Optional.
+     * If no deadline state has been set for the current trace, return an empty Optional.
      *
      * @return the enforcement strategy for the current trace, or {@link Optional#empty()} if no such
-     * deadline state exists or it is suppressed.
+     * deadline state exists.
      */
     public static Optional<Enforcement> getEnforcement() {
-        return Optional.ofNullable(getEffectiveDeadline()).map(ProvidedDeadline::enforcement);
+        return Optional.ofNullable(deadlineState.get())
+                .map(stateDeadline -> resolveEnforcement(stateDeadline.enforcement(), Enforcement.DEFER));
     }
 
     /**
@@ -181,7 +193,6 @@ public final class Deadlines {
      *   - the value returned by {@link #getRemainingDeadline()}} if it exists
      * This ensures that the deadline set for the request will be based on the remaining deadline from
      * already-set internal state, or a smaller one if the caller chooses that.
-     * When {@link #isSuppressed()} is true, only the proposed deadline and client enforcement strategy are used.
      * <p>
      * This function has no side effects on the internal deadline state stored in a TraceLocal.
      * <p>
@@ -203,41 +214,19 @@ public final class Deadlines {
             T request,
             RequestEncodingAdapter<? super T> adapter,
             Enforcement clientEnforcement) {
-        encodeToRequest(proposedDeadline, request, adapter, clientEnforcement, isSuppressed());
-    }
-
-    /**
-     * Encodes a deadline using suppression captured when the logical request began. The explicit suppression value
-     * takes precedence over {@link #isSuppressed()} on the thread encoding this attempt. The client-proposed deadline
-     * and enforcement strategy still apply when the inherited deadline is suppressed.
-     *
-     * @param suppressInheritedDeadline whether to ignore the deadline and enforcement strategy stored on the trace
-     * @see #encodeToRequest(Duration, Object, RequestEncodingAdapter, Enforcement)
-     */
-    public static <T> void encodeToRequest(
-            Duration proposedDeadline,
-            T request,
-            RequestEncodingAdapter<? super T> adapter,
-            Enforcement clientEnforcement,
-            boolean suppressInheritedDeadline) {
-        ProvidedDeadline stateDeadline = suppressInheritedDeadline ? null : deadlineState.get();
+        ProvidedDeadline stateDeadline = deadlineState.get();
         long proposedDeadlineNanos = proposedDeadline.toNanos();
         if (stateDeadline == null) {
             // use proposedDeadline
-            checkExpiration(
-                    proposedDeadlineNanos,
-                    false,
-                    false,
-                    false,
-                    clientEnforcement == Enforcement.ENFORCE,
-                    proposedDeadlineNanos);
+            Enforcement resolvedEnforcement = resolveEnforcement(Enforcement.DEFER, clientEnforcement);
+            checkExpiration(proposedDeadlineNanos, false, false, false, resolvedEnforcement == Enforcement.ENFORCE);
             adapter.setHeader(
                     request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
-            encodeEnforcement(request, adapter, clientEnforcement);
+            encodeEnforcement(request, adapter, resolvedEnforcement);
         } else {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
-            Enforcement resolvedEnforcement = stateDeadline.enforcement().resolveWith(clientEnforcement);
+            Enforcement resolvedEnforcement = resolveEnforcement(stateDeadline.enforcement(), clientEnforcement);
             boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
@@ -246,8 +235,7 @@ public final class Deadlines {
                         false,
                         stateDeadline.disablePropagation(),
                         proposedDeadlineAlreadyExpired,
-                        enforced,
-                        stateDeadline.valueNanos());
+                        enforced);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request, DeadlinesHttpHeaders.EXPECT_WITHIN, durationToHeaderValue(proposedDeadlineNanos));
@@ -259,8 +247,7 @@ public final class Deadlines {
                         stateDeadline.internal(),
                         stateDeadline.disablePropagation(),
                         stateDeadline.alreadyExpired(),
-                        enforced,
-                        stateDeadline.valueNanos());
+                        enforced);
                 if (!stateDeadline.disablePropagation()) {
                     adapter.setHeader(
                             request,
@@ -442,9 +429,12 @@ public final class Deadlines {
         parseFromRequest(internalDeadline, request, adapter, Enforcement.DEFER);
     }
 
-    @Nullable
-    private static ProvidedDeadline getEffectiveDeadline() {
-        return isSuppressed() ? null : deadlineState.get();
+    /**
+     * Resolves the stored and client-requested strategies, unless {@link #withEnforcementDisabled} has overridden
+     * enforcement for the calling thread, in which case {@link Enforcement#DISABLE} wins.
+     */
+    private static Enforcement resolveEnforcement(Enforcement stateEnforcement, Enforcement clientEnforcement) {
+        return isEnforcementDisabled() ? Enforcement.DISABLE : stateEnforcement.resolveWith(clientEnforcement);
     }
 
     private static void storeDeadline(long deadline, boolean internal, Enforcement enforcement) {
@@ -454,12 +444,7 @@ public final class Deadlines {
     }
 
     private static void checkExpiration(
-            long deadline,
-            boolean internal,
-            boolean disablePropagation,
-            boolean alreadyExpired,
-            boolean enforced,
-            long originalBudgetNanos) {
+            long deadline, boolean internal, boolean disablePropagation, boolean alreadyExpired, boolean enforced) {
         if (deadline <= 0) {
             // expired
             Expired_Cause cause = internal ? Expired_Cause.INTERNAL : Expired_Cause.EXTERNAL;
@@ -477,6 +462,11 @@ public final class Deadlines {
                     intent = Expired_Intent.PROPAGATE;
                 }
             }
+
+            // Record the original deadline budget bucket. If state exists, use the original
+            // value stored at parse time; otherwise the deadline arg itself is the original budget.
+            ProvidedDeadline state = deadlineState.get();
+            long originalBudgetNanos = state != null ? state.valueNanos() : deadline;
 
             metrics.expired()
                     .cause(cause)
