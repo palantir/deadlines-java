@@ -231,12 +231,11 @@ public final class Deadlines {
 
     private static <T> void encodeEnforcement(
             T request, RequestEncodingAdapter<? super T> adapter, Enforcement enforcement) {
-        String headerValue =
-                switch (enforcement) {
-                    case DISABLE -> "false";
-                    case ENFORCE -> "true";
-                    case DEFER -> null;
-                };
+        String headerValue = switch (enforcement) {
+            case DISABLE -> "false";
+            case ENFORCE -> "true";
+            case DEFER -> null;
+        };
         if (headerValue != null) {
             adapter.setHeader(request, DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, headerValue);
         }
