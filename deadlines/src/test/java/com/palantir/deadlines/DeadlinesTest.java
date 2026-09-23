@@ -32,12 +32,14 @@ import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.Detached;
 import com.palantir.tracing.DetachedSpan;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.FutureTask;
 import javax.annotation.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,11 +47,144 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.quicktheories.core.Gen;
 import org.quicktheories.generators.Generate;
 
 class DeadlinesTest {
+
+    @Test
+    void enforcement_override_is_visible_without_a_trace() {
+        assertThat(Deadlines.isEnforcementDisabled()).isFalse();
+        Deadlines.withEnforcementDisabled(() -> {
+            assertThat(Deadlines.isEnforcementDisabled())
+                    .as("readable with no trace attached, so callers can carry it to another thread")
+                    .isTrue();
+            assertThat(Deadlines.getEnforcement())
+                    .as("there is no deadline to report a strategy for")
+                    .isEmpty();
+        });
+        assertThat(Deadlines.isEnforcementDisabled()).isFalse();
+    }
+
+    @Test
+    void enforcement_override_is_scoped_and_nestable() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            parseDeadline("50", Enforcement.ENFORCE);
+
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+            Deadlines.withEnforcementDisabled(() -> {
+                assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+                Deadlines.withEnforcementDisabled(
+                        () -> assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE));
+                assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+            });
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+        }
+    }
+
+    @Test
+    void enforcement_override_is_restored_after_exception() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            parseDeadline("50", Enforcement.ENFORCE);
+            RuntimeException failure = new RuntimeException("expected");
+
+            assertThatThrownBy(() -> Deadlines.withEnforcementDisabled(() -> {
+                        assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+                        throw failure;
+                    }))
+                    .isSameAs(failure);
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+        }
+    }
+
+    @Test
+    void enforcement_override_keeps_the_inherited_deadline_but_does_not_throw() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            parseDeadline("0", Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.withEnforcementDisabled(() -> {
+                assertThat(Deadlines.getRemainingDeadline())
+                        .as("the deadline itself is unchanged, only enforcement is disabled")
+                        .contains(Duration.ZERO);
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+                Deadlines.encodeToRequest(
+                        Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE);
+            });
+
+            assertThat(outbound)
+                    .isEqualTo(Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            "0",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED,
+                            "false"));
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(5), new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Enforcement.class)
+    void enforcement_override_propagates_disable_downstream(Enforcement clientEnforcement) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            parseDeadline("50", Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.withEnforcementDisabled(() -> Deadlines.encodeToRequest(
+                    Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, clientEnforcement));
+
+            assertThat(outbound)
+                    .isEqualTo(Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            "5.000",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED,
+                            "false"));
+        }
+    }
+
+    @Test
+    void enforcement_override_applies_without_trace_state() {
+        Map<String, String> outbound = new HashMap<>();
+        Deadlines.withEnforcementDisabled(() ->
+                Deadlines.encodeToRequest(Duration.ZERO, outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE));
+
+        assertThat(outbound)
+                .isEqualTo(Map.of(
+                        DeadlinesHttpHeaders.EXPECT_WITHIN, "0", DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false"));
+    }
+
+    @Test
+    void enforcement_override_is_thread_local_even_when_trace_is_shared() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            parseDeadline("50", Enforcement.ENFORCE);
+            Deadlines.withEnforcementDisabled(() -> {
+                Detached trace = DetachedSpan.detach();
+                FutureTask<Optional<Enforcement>> otherThread = new FutureTask<>(() -> {
+                    try (CloseableSpan attached = trace.attach()) {
+                        return Deadlines.getEnforcement();
+                    }
+                });
+                new Thread(otherThread, "deadline-enforcement-override-test").start();
+
+                assertThat(otherThread)
+                        .succeedsWithin(Duration.ofSeconds(10))
+                        .isEqualTo(Optional.of(Enforcement.ENFORCE));
+                assertThat(Deadlines.getEnforcement()).contains(Enforcement.DISABLE);
+            });
+        }
+    }
+
+    private static void parseDeadline(String expectWithinSeconds, Enforcement enforcement) {
+        Deadlines.parseFromRequest(
+                Optional.empty(),
+                Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, expectWithinSeconds),
+                DummyRequestDecoder.INSTANCE,
+                enforcement);
+    }
 
     @Test
     public void test_duration_to_header_value_avoids_encoding_negative_values() {
@@ -554,7 +689,8 @@ class DeadlinesTest {
                     .isNotNull()
                     .isEqualTo("0");
             assertThat(expiredMeterPropagateIntent.getCount()).isGreaterThan(expiredMeterPropagateIntentValue);
-            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount()).isZero();
+            assertThat(expiredMeterPropagateAlreadyExpiredIntent.getCount())
+                    .isEqualTo(expiredMeterPropagateAlreadyExpiredIntentValue);
 
             // next hop parses a zero deadline
             try (CloseableSpan ignored2 = server2Span.attach()) {
