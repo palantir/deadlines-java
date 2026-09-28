@@ -88,7 +88,9 @@ class DeadlinesTest {
 
             Deadlines.withoutInheritedDeadlines(() -> {
                 assertThat(Deadlines.getRemainingDeadline()).isEmpty();
-                assertThat(Deadlines.getEnforcement()).isEmpty();
+                assertThat(Deadlines.getEnforcement())
+                        .as("only the deadline value is suppressed, the trace's strategy still applies")
+                        .contains(Enforcement.ENFORCE);
                 assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
                         .doesNotThrowAnyException();
             });
@@ -99,8 +101,9 @@ class DeadlinesTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"DEFER, ", "ENFORCE, true", "DISABLE, false"})
-    void suppression_uses_client_deadline(Enforcement clientEnforcement, @Nullable String enforcementHeader) {
+    @CsvSource({"DEFER, true", "ENFORCE, true", "DISABLE, false"})
+    void suppression_uses_client_deadline_with_the_traces_enforcement(
+            Enforcement clientEnforcement, @Nullable String enforcementHeader) {
         try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
             Deadlines.parseFromRequest(
                     Optional.empty(),
@@ -121,6 +124,31 @@ class DeadlinesTest {
             assertThatThrownBy(() -> Deadlines.encodeToRequest(
                             Duration.ofSeconds(5), new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
                     .isInstanceOf(DeadlineExpiredException.External.class);
+        }
+    }
+
+    @Test
+    void suppression_honours_an_upstream_that_disabled_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN, "0",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.withoutInheritedDeadlines(() -> Deadlines.encodeToRequest(
+                    Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE));
+
+            assertThat(outbound)
+                    .as("an upstream DISABLE is absorbing, so suppressing the value must not re-enable enforcement")
+                    .isEqualTo(Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            "5.000",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED,
+                            "false"));
         }
     }
 
