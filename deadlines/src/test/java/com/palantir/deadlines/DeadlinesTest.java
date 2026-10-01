@@ -33,6 +33,9 @@ import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
 import com.palantir.tracing.DetachedSpan;
+import com.palantir.tracing.TraceMetadata;
+import com.palantir.tracing.Tracer;
+import com.palantir.tracing.api.SpanType;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
@@ -1184,6 +1187,22 @@ class DeadlinesTest {
 
                 assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER))
                         .isInstanceOf(DeadlineExpiredException.Internal.class);
+            }
+        }
+
+        @Test
+        void records_the_request_id_of_the_expired_request() {
+            try (CloseableSpan ignored =
+                    DetachedSpan.start("request", SpanType.SERVER_INCOMING).attach()) {
+                Optional<String> requestId = Tracer.maybeGetTraceMetadata().flatMap(TraceMetadata::getRequestId);
+                assertThat(requestId).as("server spans have a request ID").isPresent();
+                setDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                clock.elapsed = 6_000_000_000L;
+
+                assertThatThrownBy(() -> Deadlines.checkDeadline(Enforcement.DEFER))
+                        .isInstanceOfSatisfying(
+                                DeadlineExpiredException.class,
+                                e -> assertThat(e.getRequestId()).isEqualTo(requestId));
             }
         }
 
