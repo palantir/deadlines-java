@@ -43,6 +43,8 @@ version gitVersion()
 allprojects {
     repositories {
         mavenCentral() { metadataSources { mavenPom(); ignoreGradleMetadataRedirection() } }
+        // TODO: remove. Resolves the locally published request-context (version 999).
+        mavenLocal()
     }
 
     apply plugin: 'com.palantir.java-format'
