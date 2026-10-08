@@ -32,12 +32,15 @@ import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.Detached;
 import com.palantir.tracing.DetachedSpan;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.annotation.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +53,209 @@ import org.quicktheories.core.Gen;
 import org.quicktheories.generators.Generate;
 
 class DeadlinesTest {
+
+    @Test
+    void suppression_is_scoped_and_nestable() {
+        assertThat(Deadlines.isSuppressed()).isFalse();
+        Deadlines.withoutInheritedDeadlines(() -> {
+            assertThat(Deadlines.isSuppressed()).isTrue();
+            Deadlines.withoutInheritedDeadlines(
+                    () -> assertThat(Deadlines.isSuppressed()).isTrue());
+            assertThat(Deadlines.isSuppressed()).isTrue();
+        });
+        assertThat(Deadlines.isSuppressed()).isFalse();
+    }
+
+    @Test
+    void suppression_is_restored_after_exception() {
+        RuntimeException failure = new RuntimeException("expected");
+        assertThatThrownBy(() -> Deadlines.withoutInheritedDeadlines(() -> {
+                    assertThat(Deadlines.isSuppressed()).isTrue();
+                    throw failure;
+                }))
+                .isSameAs(failure);
+        assertThat(Deadlines.isSuppressed()).isFalse();
+    }
+
+    @Test
+    void suppression_hides_inherited_deadline_without_changing_trace_state() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "0"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+
+            Deadlines.withoutInheritedDeadlines(() -> {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+                assertThat(Deadlines.getEnforcement())
+                        .as("only the deadline value is suppressed, the trace's strategy still applies")
+                        .contains(Enforcement.ENFORCE);
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+            });
+
+            assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ZERO);
+            assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DEFER, true", "ENFORCE, true", "DISABLE, false"})
+    void suppression_uses_client_deadline_with_the_traces_enforcement(
+            Enforcement clientEnforcement, @Nullable String enforcementHeader) {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "0"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.withoutInheritedDeadlines(() -> Deadlines.encodeToRequest(
+                    Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, clientEnforcement));
+
+            Map<String, String> expected = new HashMap<>();
+            expected.put(DeadlinesHttpHeaders.EXPECT_WITHIN, "5.000");
+            if (enforcementHeader != null) {
+                expected.put(DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, enforcementHeader);
+            }
+            assertThat(outbound).isEqualTo(expected);
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(5), new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.DEFER))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+        }
+    }
+
+    @Test
+    void suppression_honours_an_upstream_that_disabled_enforcement() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN, "0",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED, "false"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.withoutInheritedDeadlines(() -> Deadlines.encodeToRequest(
+                    Duration.ofSeconds(5), outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE));
+
+            assertThat(outbound)
+                    .as("an upstream DISABLE is absorbing, so suppressing the value must not re-enable enforcement")
+                    .isEqualTo(Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            "5.000",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED,
+                            "false"));
+        }
+    }
+
+    @Test
+    void suppression_preserves_client_deadline_enforcement() {
+        Deadlines.withoutInheritedDeadlines(() -> assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                        Duration.ZERO, new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE))
+                .isInstanceOf(DeadlineExpiredException.External.class));
+    }
+
+    @Test
+    void suppression_is_thread_local_even_when_trace_is_shared() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.withoutInheritedDeadlines(() -> {
+                Detached trace = DetachedSpan.detach();
+                FutureTask<Boolean> otherThread = new FutureTask<>(() -> {
+                    try (CloseableSpan attached = trace.attach()) {
+                        return Deadlines.isSuppressed();
+                    }
+                });
+                new Thread(otherThread, "deadline-suppression-test").start();
+
+                assertThat(otherThread).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(false);
+                assertThat(Deadlines.isSuppressed()).isTrue();
+            });
+        }
+    }
+
+    @Test
+    void encode_uses_captured_suppression_after_scope_closes() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "0"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+            AtomicBoolean capturedSuppression = new AtomicBoolean();
+            Deadlines.withoutInheritedDeadlines(() -> capturedSuppression.set(Deadlines.isSuppressed()));
+
+            Map<String, String> outbound = new HashMap<>();
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(5),
+                    outbound,
+                    DummyRequestEncoder.INSTANCE,
+                    Enforcement.ENFORCE,
+                    capturedSuppression.get());
+
+            assertThat(outbound)
+                    .isEqualTo(Map.of(
+                            DeadlinesHttpHeaders.EXPECT_WITHIN,
+                            "5.000",
+                            DeadlinesHttpHeaders.EXPECT_WITHIN_ENFORCED,
+                            "true"));
+            assertThat(Deadlines.isSuppressed()).isFalse();
+            assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ZERO);
+        }
+    }
+
+    @Test
+    void captured_suppression_uses_client_budget_for_expiration_metric() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "50"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+            @SuppressWarnings("for-rollout:deprecation")
+            Meter clientBudgetMeter = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton())
+                    .expired()
+                    .cause(Expired_Cause.EXTERNAL)
+                    .intent(Expired_Intent.THROW)
+                    .budget(Expired_Budget.SUB_100MS)
+                    .build();
+            long originalCount = clientBudgetMeter.getCount();
+
+            assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                            Duration.ZERO, new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE, true))
+                    .isInstanceOf(DeadlineExpiredException.External.class);
+
+            assertThat(clientBudgetMeter.getCount())
+                    .as("the expired client deadline has a zero budget; the inherited 50-second deadline is suppressed")
+                    .isEqualTo(originalCount + 1);
+        }
+    }
+
+    @Test
+    void encode_uses_captured_false_despite_current_thread_suppression() {
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Deadlines.parseFromRequest(
+                    Optional.empty(),
+                    Map.of(DeadlinesHttpHeaders.EXPECT_WITHIN, "0"),
+                    DummyRequestDecoder.INSTANCE,
+                    Enforcement.ENFORCE);
+            boolean capturedSuppression = Deadlines.isSuppressed();
+
+            Deadlines.withoutInheritedDeadlines(() -> {
+                assertThatThrownBy(() -> Deadlines.encodeToRequest(
+                                Duration.ofSeconds(5),
+                                new HashMap<>(),
+                                DummyRequestEncoder.INSTANCE,
+                                Enforcement.ENFORCE,
+                                capturedSuppression))
+                        .isInstanceOf(DeadlineExpiredException.External.class);
+                assertThat(Deadlines.isSuppressed()).isTrue();
+            });
+        }
+    }
 
     @Test
     public void test_duration_to_header_value_avoids_encoding_negative_values() {
