@@ -184,7 +184,7 @@ public final class Deadlines {
             // use the minimum of proposedDeadline and the one read from state
             long remainingStateDeadlineNanos = stateDeadline.remainingNanos(getClockNanoTime());
             Enforcement resolvedEnforcement = stateDeadline.enforcement().resolveWith(clientEnforcement);
-            boolean enforced = resolvedEnforcement == Enforcement.ENFORCE;
+            boolean enforced = !stateDeadline.disablePropagation() && resolvedEnforcement == Enforcement.ENFORCE;
             if (proposedDeadlineNanos <= remainingStateDeadlineNanos) {
                 boolean proposedDeadlineAlreadyExpired = proposedDeadline.isNegative() || proposedDeadline.isZero();
                 checkExpiration(
