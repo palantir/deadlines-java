@@ -18,17 +18,42 @@ package com.palantir.deadlines;
 
 import com.palantir.logsafe.Arg;
 import com.palantir.logsafe.Safe;
+import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.SafeLoggable;
+import com.palantir.tracing.TraceMetadata;
+import com.palantir.tracing.Tracer;
 import java.util.List;
+import java.util.Optional;
+import javax.annotation.Nullable;
 
 /**
  * Indicates that a deadline has expired.
  */
 public abstract sealed class DeadlineExpiredException extends RuntimeException implements SafeLoggable {
-    private static final List<Arg<?>> EMPTY_ARGS = List.of();
+    @Nullable
+    private final String requestId;
 
     private DeadlineExpiredException(String message) {
         super(message);
+        this.requestId = Tracer.maybeGetTraceMetadata()
+                .flatMap(TraceMetadata::getRequestId)
+                .orElse(null);
+    }
+
+    /**
+     * Returns the request ID of the trace that was current when this exception was created, if any.
+     * <p>
+     * An exception shared between requests, for example through a cache or future, retains the ID of the request
+     * that created it. A request ID that differs from the current request's indicates that the expired deadline
+     * belonged to another request.
+     */
+    public Optional<String> getRequestId() {
+        return Optional.ofNullable(requestId);
+    }
+
+    @Override
+    public List<Arg<?>> getArgs() {
+        return requestId == null ? List.of() : List.of(SafeArg.of("requestId", requestId));
     }
 
     public static External external() {
@@ -53,11 +78,6 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         public @Safe String getLogMessage() {
             return MESSAGE;
         }
-
-        @Override
-        public List<Arg<?>> getArgs() {
-            return EMPTY_ARGS;
-        }
     }
 
     /**
@@ -73,11 +93,6 @@ public abstract sealed class DeadlineExpiredException extends RuntimeException i
         @Override
         public @Safe String getLogMessage() {
             return MESSAGE;
-        }
-
-        @Override
-        public List<Arg<?>> getArgs() {
-            return EMPTY_ARGS;
         }
     }
 }
