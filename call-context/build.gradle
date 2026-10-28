@@ -1,0 +1,31 @@
+apply plugin: 'com.palantir.external-publish-jar'
+apply plugin: 'com.palantir.metric-schema'
+apply plugin: 'com.palantir.revapi'
+apply plugin: 'com.palantir.baseline-class-uniqueness'
+
+group 'com.palantir.callcontext'
+
+dependencies {
+    api project(':deadlines')
+
+    implementation 'com.google.code.findbugs:jsr305'
+    implementation 'com.google.errorprone:error_prone_annotations'
+    implementation 'com.google.guava:guava'
+    implementation 'com.palantir.safe-logging:logger'
+    implementation 'com.palantir.safe-logging:preconditions'
+    implementation 'com.palantir.safe-logging:safe-logging'
+    implementation 'com.palantir.tritium:tritium-registry'
+    implementation 'io.dropwizard.metrics:metrics-core'
+
+    testImplementation 'com.palantir.tracing:tracing'
+    testImplementation 'org.assertj:assertj-core'
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.quicktheories:quicktheories'
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs += ['-Werror']
+    options.errorprone.error 'SafeLoggingPropagation'
+}
+
+tasks.named('check') { dependsOn 'javadoc', 'checkUnusedDependencies' }

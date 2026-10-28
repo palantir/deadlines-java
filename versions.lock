@@ -2,7 +2,7 @@
 
 com.google.code.findbugs:jsr305:3.0.2 (1 constraints: a41965b5)
 
-com.google.errorprone:error_prone_annotations:2.50.0 (9 constraints: 97857b31)
+com.google.errorprone:error_prone_annotations:2.50.0 (10 constraints: cf8ada50)
 
 com.google.guava:failureaccess:1.0.3 (1 constraints: 160ae3b4)
 
@@ -34,7 +34,7 @@ com.palantir.tritium:tritium-core:0.139.0 (1 constraints: 7510beb2)
 
 com.palantir.tritium:tritium-metrics:0.139.0 (1 constraints: 6f05af40)
 
-com.palantir.tritium:tritium-registry:0.139.0 (2 constraints: da15ecf0)
+com.palantir.tritium:tritium-registry:0.139.0 (2 constraints: 771890b8)
 
 io.dropwizard.metrics:metrics-core:4.2.40 (3 constraints: 40269d76)
 
