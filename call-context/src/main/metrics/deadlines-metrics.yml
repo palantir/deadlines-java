@@ -1,0 +1,54 @@
+options:
+  javaPackage: com.palantir.callcontext
+  javaVisibility: packagePrivate
+namespaces:
+  deadline:
+    docs: Metrics for deadlines.
+    metrics:
+      expired:
+        type: meter
+        tags:
+          - name: cause
+            values:
+              - value: internal
+                docs: A deadline expiration was caused by an internal process, such as
+                      a server's inability to meet its own internal deadline even though
+                      a client provided ample time.
+              - value: external
+                docs: A deadline expiration was caused due to the inability to meet an 
+                      externally provided deadline, such as a server being unable to
+                      complete required work before a client-provided deadline elapses.
+          - name: intent
+            docs: Describes the intent (or not) to propagate an expired deadline on
+                  further RPC calls.
+            values:
+              - value: throw
+                docs: Enforcement was enabled for this trace at the time the deadline
+                      expiration was reached, and an exception was thrown.
+              - value: propagate
+                docs: Deadline propagation was enabled for this trace at the time
+                      the deadline expiration was reached. This means that further
+                      RPC calls will still potentially propagate an expired deadline
+                      value.
+              - value: propagate-already-expired
+                docs: Deadline propagation was enabled for this trace, but the deadline
+                      had already expired by the time it was first received.
+              - value: ignore
+                docs: Deadline propagation was disabled for this trace at the time
+                      the deadline expiration was reached. This means that further
+                      RPC calls will not propagate an expired deadline value any more.
+          - name: budget
+            docs: Records the original deadline budget bucket at the time of a deadline
+                  expiration.
+            values:
+              - value: sub-100ms
+                docs: Original deadline budget was less than 100 milliseconds.
+              - value: sub-1s
+                docs: Original deadline budget was less than 1 second.
+              - value: sub-10s
+                docs: Original deadline budget was less than 10 seconds.
+              - value: sub-100s
+                docs: Original deadline budget was less than 100 seconds.
+              - value: above-100s
+                docs: Original deadline budget was 100 seconds or more.
+        docs: Marked every time a deadline expiration is reached
