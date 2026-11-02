@@ -107,7 +107,8 @@ public final class Deadlines {
 
     /**
      * Throws a {@link DeadlineExpiredException} if the current deadline has expired and is enforced, recording
-     * the expiration in the {@code deadline.expired} meter.
+     * the expiration in the {@code callcontext.deadline.expired} meter, or in the {@code deadline.expired} meter of
+     * {@link com.palantir.deadlines.Deadlines} for a deadline stored for the trace.
      * <p>
      * This is the counterpart to the check {@link #encodeToRequest} performs, for callers that need to enforce a
      * deadline at a point where they are not sending a request -- for example when work that was waiting on a
@@ -280,7 +281,7 @@ public final class Deadlines {
      *   <li>if {@code future} has already completed, its result is returned (or its failure thrown), even if the
      *       deadline has expired;
      *   <li>otherwise, if the deadline has expired or expires before {@code future} completes, the expiration is
-     *       recorded in the {@code deadline.expired} meter and a {@link DeadlineExpiredException} is thrown.
+     *       recorded in the {@code callcontext.deadline.expired} meter and a {@link DeadlineExpiredException} is thrown.
      * </ul>
      * Without an enforced deadline, this behaves exactly like {@link Future#get()}.
      * <p>

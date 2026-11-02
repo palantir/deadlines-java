@@ -303,6 +303,26 @@ class DeadlinesTest {
     }
 
     @Test
+    public void context_deadline_expiration_is_recorded_separately_from_deadlines_java() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        long callContextBefore = expiredCount("callcontext.deadline.expired");
+        long deadlinesJavaBefore = expiredCount("deadline.expired");
+        try (CallContextScope ignored =
+                internal(Duration.ofMillis(1), Enforcement.DISABLE).attach()) {
+            clock.advance(Duration.ofMillis(2));
+            Deadlines.encodeToRequest(
+                    Duration.ofSeconds(10), new HashMap<>(), DummyRequestEncoder.INSTANCE, Enforcement.DEFER);
+        }
+        assertThat(expiredCount("callcontext.deadline.expired"))
+                .as("call-context records its own expirations")
+                .isEqualTo(callContextBefore + 1);
+        assertThat(expiredCount("deadline.expired"))
+                .as("deadlines-java expirations are unaffected")
+                .isEqualTo(deadlinesJavaBefore);
+    }
+
+    @Test
     public void multihop_expired_received_deadline_marks_propagate_already_expired_meter() {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
@@ -717,6 +737,14 @@ class DeadlinesTest {
                 .intent(intent)
                 .budget(Expired_Budget.SUB_10S)
                 .build();
+    }
+
+    @SuppressWarnings("for-rollout:deprecation")
+    private static long expiredCount(String metricName) {
+        return SharedTaggedMetricRegistries.getSingleton().getMetrics().entrySet().stream()
+                .filter(entry -> entry.getKey().safeName().equals(metricName))
+                .mapToLong(entry -> ((Meter) entry.getValue()).getCount())
+                .sum();
     }
 
     private enum DummyRequestEncoder implements RequestEncodingAdapter<Map<String, String>> {

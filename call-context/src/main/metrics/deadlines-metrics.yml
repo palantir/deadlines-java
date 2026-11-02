@@ -2,8 +2,9 @@ options:
   javaPackage: com.palantir.callcontext
   javaVisibility: packagePrivate
 namespaces:
-  deadline:
-    docs: Metrics for deadlines.
+  callcontext.deadline:
+    shortName: Deadline
+    docs: Metrics for deadlines stored in the call context.
     metrics:
       expired:
         type: meter
