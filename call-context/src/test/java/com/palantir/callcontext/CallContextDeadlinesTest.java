@@ -41,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -688,13 +689,111 @@ class CallContextDeadlinesTest {
         }
 
         @Test
-        void awaiting_ignores_the_trace_deadline() throws Exception {
+        void awaiting_waits_no_longer_than_an_enforced_trace_deadline() throws Exception {
             RecordingFuture future = RecordingFuture.pending();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+
+                assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isEqualTo("value");
+            }
+            assertThat(future.calls)
+                    .singleElement()
+                    .satisfies(call -> FIVE_SECOND_TRACE_DEADLINE.accept(timeoutOf(call)));
+        }
+
+        @Test
+        void awaiting_throws_when_an_enforced_trace_deadline_expires_while_waiting_without_cancelling_the_future() {
+            CompletableFuture<String> future = new CompletableFuture<>();
+            long callContextBefore = expiredCount("callcontext.deadline.expired");
+            long deadlinesJavaBefore = expiredCount("deadline.expired");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofMillis(50), Enforcement.ENFORCE);
+
+                assertThatThrownBy(() -> Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isInstanceOf(DeadlineExpiredException.Internal.class);
+            }
+            assertThat(future).isNotCancelled();
+            assertThat(expiredCount("deadline.expired"))
+                    .as("deadlines-java records the expiration of the deadline it stores")
+                    .isEqualTo(deadlinesJavaBefore + 1);
+            assertThat(expiredCount("callcontext.deadline.expired")).isEqualTo(callContextBefore);
+        }
+
+        @Test
+        void awaiting_throws_without_waiting_if_the_trace_deadline_has_already_expired() {
+            RecordingFuture future = RecordingFuture.pending();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ZERO, Enforcement.ENFORCE);
+
+                assertThatThrownBy(() -> Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isInstanceOf(DeadlineExpiredException.Internal.class);
+            }
+            assertThat(future.calls).isEmpty();
+        }
+
+        @Test
+        void awaiting_returns_the_result_of_a_completed_future_even_after_the_trace_deadline_expired()
+                throws Exception {
+            RecordingFuture future = RecordingFuture.completed();
             try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
                 setTraceDeadline(Duration.ZERO, Enforcement.ENFORCE);
 
                 assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
                         .isEqualTo("value");
+            }
+            assertThat(future.calls).containsExactly("get()");
+        }
+
+        @Test
+        void awaiting_ignores_a_trace_deadline_that_is_not_enforced() throws Exception {
+            RecordingFuture future = RecordingFuture.pending();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ZERO, Enforcement.DEFER);
+
+                assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isEqualTo("value");
+            }
+            assertThat(future.calls).containsExactly("get()");
+        }
+
+        @Test
+        void awaiting_ignores_a_trace_deadline_after_its_propagation_is_disabled() throws Exception {
+            RecordingFuture future = RecordingFuture.pending();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ZERO, Enforcement.ENFORCE);
+                com.palantir.deadlines.Deadlines.disableFurtherDeadlinePropagation();
+
+                assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isEqualTo("value");
+            }
+            assertThat(future.calls).containsExactly("get()");
+        }
+
+        @Test
+        void awaiting_keeps_waiting_if_the_trace_deadline_stops_applying_while_waiting() throws Exception {
+            // As when the response commits while the caller waits
+            RecordingFuture future =
+                    RecordingFuture.timingOut(com.palantir.deadlines.Deadlines::disableFurtherDeadlinePropagation);
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+
+                assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                        .isEqualTo("value");
+            }
+            assertThat(future.calls).hasSize(2).last().isEqualTo("get()");
+        }
+
+        @Test
+        void awaiting_uses_the_call_context_deadline_instead_of_the_trace_deadline() throws Exception {
+            RecordingFuture future = RecordingFuture.pending();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ZERO, Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = Deadlines.withoutDeadline()) {
+                    assertThat(Deadlines.awaitWithinDeadline(future, Enforcement.DEFER))
+                            .isEqualTo("value");
+                }
             }
             assertThat(future.calls).containsExactly("get()");
         }
@@ -730,6 +829,20 @@ class CallContextDeadlinesTest {
         Map<String, String> headers = new HashMap<>();
         Deadlines.encodeToRequest(proposedDeadline, headers, MapAdapter.INSTANCE, clientEnforcement);
         return headers;
+    }
+
+    // The timeout of a get(<timeout>ns) call that RecordingFuture recorded
+    private static Duration timeoutOf(String call) {
+        assertThat(call).startsWith("get(").endsWith("ns)");
+        return Duration.ofNanos(Long.parseLong(call.substring("get(".length(), call.length() - "ns)".length())));
+    }
+
+    @SuppressWarnings("for-rollout:deprecation")
+    private static long expiredCount(String metricName) {
+        return SharedTaggedMetricRegistries.getSingleton().getMetrics().entrySet().stream()
+                .filter(entry -> entry.getKey().safeName().equals(metricName))
+                .mapToLong(entry -> ((Meter) entry.getValue()).getCount())
+                .sum();
     }
 
     @SuppressWarnings("for-rollout:deprecation")
