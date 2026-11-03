@@ -51,7 +51,8 @@ import javax.annotation.Nullable;
  *       {@link #disarmRequestDeadline}.
  *   <li>Otherwise, the deadline that {@link com.palantir.deadlines.Deadlines} stores for the current trace applies.
  *       {@link #getRemainingDeadline()}, {@link #getEnforcement()}, {@link #checkDeadline} and {@link #encodeToRequest}
- *       then behave exactly as their counterparts there. {@link #awaitWithinDeadline} ignores it.
+ *       then behave exactly as their counterparts there, and {@link #awaitWithinDeadline} waits no longer than it
+ *       allows.
  *   <li>Otherwise, there is no deadline.
  * </ol>
  * A deadline in the call context is handed to other threads with the context, for example with
@@ -272,16 +273,18 @@ public final class Deadlines {
     }
 
     /**
-     * Waits for {@code future} to complete, but no longer than the call context's deadline allows when that
-     * deadline is enforced. Unlike the other methods, this ignores the deadline stored for the trace.
+     * Waits for {@code future} to complete, but no longer than the current deadline (see the class documentation)
+     * allows when that deadline is enforced.
      * <p>
-     * The call context's deadline is enforced when its {@link Enforcement}, resolved against
-     * {@code clientEnforcement} by {@link Enforcement#resolveWith}, is {@link Enforcement#ENFORCE}. In that case:
+     * The current deadline is enforced when its {@link Enforcement}, resolved against {@code clientEnforcement} by
+     * {@link Enforcement#resolveWith}, is {@link Enforcement#ENFORCE}. In that case:
      * <ul>
      *   <li>if {@code future} has already completed, its result is returned (or its failure thrown), even if the
      *       deadline has expired;
      *   <li>otherwise, if the deadline has expired or expires before {@code future} completes, the expiration is
-     *       recorded in the {@code callcontext.deadline.expired} meter and a {@link DeadlineExpiredException} is thrown.
+     *       recorded in the {@code callcontext.deadline.expired} meter, or in the {@code deadline.expired} meter of
+     *       {@link com.palantir.deadlines.Deadlines} for a deadline stored for the trace, and a
+     *       {@link DeadlineExpiredException} is thrown.
      * </ul>
      * Without an enforced deadline, this behaves exactly like {@link Future#get()}.
      * <p>
@@ -295,7 +298,10 @@ public final class Deadlines {
     public static <V> V awaitWithinDeadline(Future<V> future, Enforcement clientEnforcement)
             throws ExecutionException, InterruptedException {
         ContextDeadline contextDeadline = contextDeadline();
-        ProvidedDeadline deadline = contextDeadline == null ? null : contextDeadline.state();
+        if (contextDeadline == null) {
+            return awaitWithinTraceDeadline(future, clientEnforcement);
+        }
+        ProvidedDeadline deadline = contextDeadline.state();
         if (future.isDone()
                 || deadline == null
                 || deadline.enforcement().resolveWith(clientEnforcement) != Enforcement.ENFORCE) {
@@ -319,6 +325,35 @@ public final class Deadlines {
         }
         recordExpiration(deadline.internal(), Expired_Intent.THROW, deadline.valueNanos());
         throw deadline.internal() ? DeadlineExpiredException.internal() : DeadlineExpiredException.external();
+    }
+
+    // awaitWithinDeadline for the deadline stored for the trace. deadlines-java checks that deadline and records its
+    // expiration, as it does for checkDeadline.
+    private static <V> V awaitWithinTraceDeadline(Future<V> future, Enforcement clientEnforcement)
+            throws ExecutionException, InterruptedException {
+        // Empty once the deadline's propagation is disabled, for example when the response commits
+        Optional<Duration> remaining = TraceDeadlines.getRemainingDeadline();
+        if (future.isDone()
+                || remaining.isEmpty()
+                || TraceDeadlines.getEnforcement().orElse(Enforcement.DEFER).resolveWith(clientEnforcement)
+                        != Enforcement.ENFORCE) {
+            return future.get();
+        }
+        long remainingNanos = remaining.get().toNanos();
+        if (remainingNanos > 0) {
+            try {
+                return future.get(remainingNanos, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                // the deadline expired while waiting; fall through to report it
+            }
+        }
+        if (future.isDone()) {
+            // the future completed after the check above, for example as the wait timed out
+            return future.get();
+        }
+        // Throws unless the deadline stopped applying while waiting
+        TraceDeadlines.checkDeadline(clientEnforcement);
+        return future.get();
     }
 
     /**
