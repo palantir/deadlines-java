@@ -69,7 +69,7 @@ public final class Deadlines {
     private Deadlines() {}
 
     // The deadline in the call context. Absent means the context does not specify a deadline, so the deadline stored
-    // for the trace applies; ContextDeadline.NONE means the context has no deadline.
+    // for the trace applies; a ContextDeadline without a state means the context has no deadline.
     private static final CallContext.Key<ContextDeadline> CONTEXT_DEADLINE = CallContext.Key.create("deadline");
 
     private static final Duration MAX_NANOS_DURATION = Duration.ofNanos(Long.MAX_VALUE);
@@ -197,8 +197,9 @@ public final class Deadlines {
                 return context.attach();
             }
             enforcement = current == null ? Enforcement.DEFER : current.enforcement();
-            // The new deadline is shortened from the current one, so it is disarmed with it.
-            disarmed = current == null ? null : current.disarmed();
+            // The new deadline is bound within the current request, so it is disarmed with it, whether it is shortened
+            // from the request's deadline or the request has none.
+            disarmed = contextDeadline.disarmed();
         }
         ProvidedDeadline bound = new ProvidedDeadline(timeoutNanos, now, true, enforcement, disarmed);
         return context.with(CONTEXT_DEADLINE, new ContextDeadline(bound)).attach();
@@ -232,7 +233,8 @@ public final class Deadlines {
      * {@link com.palantir.deadlines.Deadlines#parseFromRequest(Optional, Object, RequestDecodingAdapter, Enforcement)},
      * with the deadline measured from now. If the request has no valid {@link DeadlinesHttpHeaders#EXPECT_WITHIN}
      * header and {@code internalDeadline} is empty, the result has no deadline, so code running with it does not see
-     * any deadline stored for the trace.
+     * any deadline stored for the trace. Deadlines that {@link #withDeadline} binds within such a request are still
+     * disarmed with it, see {@link #disarmRequestDeadline}.
      *
      * @param context the context to add the deadline to, usually {@link CallContext#empty()} for a new request
      * @param internalDeadline if present, used instead of the request's deadline if it is shorter. A negative value is
@@ -248,7 +250,9 @@ public final class Deadlines {
             RequestDecodingAdapter<? super T> adapter,
             Enforcement enforcementStrategy) {
         ProvidedDeadline parsed = parseState(internalDeadline, request, adapter, enforcementStrategy);
-        return context.with(CONTEXT_DEADLINE, parsed == null ? ContextDeadline.NONE : new ContextDeadline(parsed));
+        return context.with(
+                CONTEXT_DEADLINE,
+                parsed == null ? ContextDeadline.requestWithoutDeadline() : new ContextDeadline(parsed));
     }
 
     /**
@@ -256,17 +260,18 @@ public final class Deadlines {
      * response commits, so that work the request started in the background no longer fails on it.
      * <p>
      * The deadline that {@link #withRequestDeadline} parsed for the request, and every deadline that
-     * {@link #withDeadline} shortened from it, then no longer applies: wherever it would, there is no deadline, as
-     * inside {@link #withoutDeadline()}. This holds on every thread, including for work that captured a context
-     * earlier. A deadline that {@link #withDeadline} binds once the request's deadline is disarmed still applies.
+     * {@link #withDeadline} bound within the request, then no longer applies: wherever it would, there is no deadline,
+     * as inside {@link #withoutDeadline()}. This holds on every thread, including for work that captured a context
+     * earlier, and for requests that arrived without a deadline. A deadline that {@link #withDeadline} binds once the
+     * request is disarmed still applies. So does one it binds inside {@link #withoutDeadline()}, because work there,
+     * such as a cache load, may be shared with other requests.
      * <p>
-     * Disarming cannot be undone. It does nothing if {@code context} has no deadline that comes from a request, and it
+     * Disarming cannot be undone. It does nothing if {@code context}'s deadline doesn't come from a request, and it
      * does not change the deadline stored for the trace.
      */
     public static void disarmRequestDeadline(CallContext context) {
         ContextDeadline contextDeadline = context.get(CONTEXT_DEADLINE);
-        ProvidedDeadline deadline = contextDeadline == null ? null : contextDeadline.state();
-        AtomicBoolean disarmed = deadline == null ? null : deadline.disarmed();
+        AtomicBoolean disarmed = contextDeadline == null ? null : contextDeadline.disarmed();
         if (disarmed != null) {
             disarmed.set(true);
         }
@@ -501,8 +506,8 @@ public final class Deadlines {
     // Maps a disarmed deadline to ContextDeadline.NONE: the context still specifies a deadline, and it is none.
     @Nullable
     private static ContextDeadline armed(@Nullable ContextDeadline contextDeadline) {
-        ProvidedDeadline deadline = contextDeadline == null ? null : contextDeadline.state();
-        return deadline != null && deadline.isDisarmed() ? ContextDeadline.NONE : contextDeadline;
+        AtomicBoolean disarmed = contextDeadline == null ? null : contextDeadline.disarmed();
+        return disarmed != null && disarmed.get() ? ContextDeadline.NONE : contextDeadline;
     }
 
     // Converts a timeout to nanoseconds, treating a negative timeout as zero. Duration.toNanos throws beyond roughly
@@ -649,9 +654,25 @@ public final class Deadlines {
         }
     }
 
-    // The value stored in the call context. A null state means the context has no deadline.
-    private record ContextDeadline(@Nullable ProvidedDeadline state) {
-        static final ContextDeadline NONE = new ContextDeadline(null);
+    // The value stored in the call context. A null state means the context has no deadline. A request without a
+    // deadline keeps its disarmed flag here, so that the deadlines withDeadline binds within the request share it.
+    private record ContextDeadline(
+            @Nullable ProvidedDeadline state, @Nullable AtomicBoolean noDeadlineDisarmed) {
+        static final ContextDeadline NONE = new ContextDeadline(null, null);
+
+        ContextDeadline(ProvidedDeadline state) {
+            this(state, null);
+        }
+
+        static ContextDeadline requestWithoutDeadline() {
+            return new ContextDeadline(null, new AtomicBoolean());
+        }
+
+        // The flag that disarms this deadline and the deadlines withDeadline binds from it, or null if there is none.
+        @Nullable
+        AtomicBoolean disarmed() {
+            return state == null ? noDeadlineDisarmed : state.disarmed();
+        }
     }
 
     interface Clock {

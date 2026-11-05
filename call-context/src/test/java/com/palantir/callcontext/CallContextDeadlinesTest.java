@@ -450,6 +450,70 @@ class CallContextDeadlinesTest {
         }
 
         @Test
+        void deadlines_bound_in_a_request_without_a_deadline_are_disarmed_with_it() {
+            CallContext request = requestWithoutDeadline();
+            CallContext bound;
+            try (CallContextScope ignored = request.attach();
+                    CallContextScope ignored1 = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ofSeconds(1));
+                bound = CallContext.current();
+            }
+
+            Deadlines.disarmRequestDeadline(request);
+
+            try (CallContextScope ignored = bound.attach()) {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+            }
+        }
+
+        @Test
+        void a_deadline_bound_after_disarming_a_request_without_a_deadline_applies() {
+            CallContext request = requestWithoutDeadline();
+
+            Deadlines.disarmRequestDeadline(request);
+
+            try (CallContextScope ignored = request.attach();
+                    CallContextScope ignored1 = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ofSeconds(1));
+            }
+        }
+
+        @Test
+        void disarming_a_request_without_a_deadline_leaves_other_requests_armed() {
+            CallContext request = requestWithoutDeadline();
+            CallContext otherRequest = requestWithoutDeadline();
+            CallContext boundInOtherRequest;
+            try (CallContextScope ignored = otherRequest.attach();
+                    CallContextScope ignored1 = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                boundInOtherRequest = CallContext.current();
+            }
+
+            Deadlines.disarmRequestDeadline(request);
+
+            try (CallContextScope ignored = boundInOtherRequest.attach()) {
+                assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ofSeconds(1));
+            }
+        }
+
+        @Test
+        void deadlines_bound_inside_without_deadline_are_not_disarmed_with_the_request() {
+            // Work inside withoutDeadline(), such as a cache load, may be shared with other requests
+            CallContext request = external(Duration.ofSeconds(10), Enforcement.ENFORCE);
+            CallContext bound;
+            try (CallContextScope ignored = request.attach();
+                    CallContextScope ignored1 = Deadlines.withoutDeadline();
+                    CallContextScope ignored2 = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                bound = CallContext.current();
+            }
+
+            Deadlines.disarmRequestDeadline(request);
+
+            try (CallContextScope ignored = bound.attach()) {
+                assertThat(Deadlines.getRemainingDeadline()).contains(Duration.ofSeconds(1));
+            }
+        }
+
+        @Test
         void a_deadline_bound_after_disarming_applies() {
             CallContext request = external(Duration.ofSeconds(10), Enforcement.ENFORCE);
 
@@ -813,6 +877,12 @@ class CallContextDeadlinesTest {
     private static CallContext internal(Duration deadline, Enforcement enforcement) {
         return Deadlines.withRequestDeadline(
                 CallContext.empty(), Optional.of(deadline), Map.of(), MapAdapter.INSTANCE, enforcement);
+    }
+
+    // A context for an inbound request without a deadline.
+    private static CallContext requestWithoutDeadline() {
+        return Deadlines.withRequestDeadline(
+                CallContext.empty(), Optional.empty(), Map.of(), MapAdapter.INSTANCE, Enforcement.ENFORCE);
     }
 
     // Stores an internal deadline for the current trace, as deadlines-java does for a request.
