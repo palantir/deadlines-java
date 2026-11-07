@@ -354,7 +354,6 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -394,7 +393,6 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -434,7 +432,6 @@ class DeadlinesTest {
             Optional<Duration> remaining = Deadlines.getRemainingDeadline();
             assertThat(remaining).hasValueSatisfying(d -> assertThat(d).isEqualTo(Duration.ZERO));
 
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeterWillPropagate = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -515,7 +512,6 @@ class DeadlinesTest {
         DetachedSpan server2Span = DetachedSpan.start("server2");
 
         try (CloseableSpan ignored = server1Span.attach()) {
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter expiredMeterPropagateIntent = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -589,7 +585,6 @@ class DeadlinesTest {
             clock.elapsed += 2_000_000;
 
             // additionally validate that the expired deadline meter is marked with the "THROW" intent
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter externalMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -1087,7 +1082,6 @@ class DeadlinesTest {
 
             clock.elapsed += Long.MAX_VALUE;
 
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter expectedMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -1117,7 +1111,6 @@ class DeadlinesTest {
 
             clock.elapsed += 11_000_000_000L;
 
-            @SuppressWarnings("for-rollout:deprecation")
             DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
             Meter sub10sMeter = metrics.expired()
                     .cause(Expired_Cause.EXTERNAL)
@@ -1270,7 +1263,6 @@ class DeadlinesTest {
         }
     }
 
-    @SuppressWarnings("for-rollout:deprecation")
     private static Meter expiredMeter(Expired_Cause cause, Expired_Intent intent) {
         return DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton())
                 .expired()
