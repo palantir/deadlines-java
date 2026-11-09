@@ -66,6 +66,8 @@ Thrown when a deadline expires and enforcement is enabled. This exception has tw
 - **`DeadlineExpiredException.External`**: Thrown when an externally-provided (client-side) deadline expires. Results in a 400 status code.
 - **`DeadlineExpiredException.Internal`**: Thrown when an internally-imposed (server-side) deadline expires. Results in a 500 status code.
 
+Both variants record the request ID of the trace that created them, available via `getRequestId()` and as the `requestId` log arg. When an exception is shared between requests, for example through a cache or future, a request ID that differs from the current request's indicates that the expired deadline belonged to another request.
+
 ## Adoption Considerations
 
 Deadlines are most beneficial for request chains with multiple downstream services where tail latency matters and preventing cascading failures is critical.
