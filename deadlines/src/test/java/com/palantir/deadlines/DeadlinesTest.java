@@ -507,6 +507,37 @@ class DeadlinesTest {
     }
 
     @Test
+    public void disable_propagation_does_not_enforce_deadline_expiration_when_client_enforces() {
+        TestClock clock = new TestClock();
+        Deadlines.setClock(clock);
+        try (CloseableTracer tracer = CloseableTracer.startSpan("test")) {
+            Map<String, String> request = new HashMap<>();
+            request.put(
+                    DeadlinesHttpHeaders.EXPECT_WITHIN,
+                    Deadlines.durationToHeaderValue(Duration.ofSeconds(1).toNanos()));
+            Deadlines.parseFromRequest(Optional.empty(), request, DummyRequestDecoder.INSTANCE, Enforcement.ENFORCE);
+
+            Deadlines.disableFurtherDeadlinePropagation();
+
+            // now expired
+            clock.elapsed += 2_000_000_000L;
+            long ignoredCount =
+                    expiredMeter(Expired_Cause.EXTERNAL, Expired_Intent.IGNORE).getCount();
+
+            Map<String, String> outbound = new HashMap<>();
+            assertThatCode(() -> Deadlines.encodeToRequest(
+                            Duration.ofSeconds(10), outbound, DummyRequestEncoder.INSTANCE, Enforcement.ENFORCE))
+                    .as("the deadline no longer applies to this trace")
+                    .doesNotThrowAnyException();
+
+            assertThat(outbound).isEmpty();
+            assertThat(expiredMeter(Expired_Cause.EXTERNAL, Expired_Intent.IGNORE)
+                            .getCount())
+                    .isEqualTo(ignoredCount + 1);
+        }
+    }
+
+    @Test
     public void multihop_expired_received_deadline_marks_propagate_already_expired_meter() {
         TestClock clock = new TestClock();
         Deadlines.setClock(clock);
