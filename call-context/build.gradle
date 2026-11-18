@@ -29,3 +29,8 @@ tasks.withType(JavaCompile) {
 }
 
 tasks.named('check') { dependsOn 'javadoc', 'checkUnusedDependencies' }
+
+revapi {
+    // call-context has no release yet to check against (only 0.30.0-rc1). Remove once a release includes it.
+    oldVersions = []
+}
