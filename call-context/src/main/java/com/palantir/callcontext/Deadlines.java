@@ -28,6 +28,7 @@ import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.deadlines.DeadlinesHttpHeaders;
+import com.palantir.logsafe.Preconditions;
 import com.palantir.logsafe.UnsafeArg;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;
@@ -120,6 +121,7 @@ public final class Deadlines {
      *     {@link Enforcement#resolveWith(Enforcement)}
      */
     public static void checkDeadline(Enforcement clientEnforcement) {
+        Preconditions.checkNotNull(clientEnforcement, "clientEnforcement");
         ContextDeadline contextDeadline = contextDeadline();
         if (contextDeadline == null) {
             TraceDeadlines.checkDeadline(clientEnforcement);
@@ -201,8 +203,9 @@ public final class Deadlines {
             // from the request's deadline or the request has none.
             disarmed = contextDeadline.disarmed();
         }
-        ProvidedDeadline bound = new ProvidedDeadline(timeoutNanos, now, true, enforcement, disarmed);
-        return context.with(CONTEXT_DEADLINE, new ContextDeadline(bound)).attach();
+        ProvidedDeadline bound = new ProvidedDeadline(timeoutNanos, now, true, enforcement);
+        return context.with(CONTEXT_DEADLINE, new ContextDeadline(bound, disarmed))
+                .attach();
     }
 
     /**
@@ -249,10 +252,10 @@ public final class Deadlines {
             T request,
             RequestDecodingAdapter<? super T> adapter,
             Enforcement enforcementStrategy) {
+        Preconditions.checkNotNull(enforcementStrategy, "enforcementStrategy");
         ProvidedDeadline parsed = parseState(internalDeadline, request, adapter, enforcementStrategy);
-        return context.with(
-                CONTEXT_DEADLINE,
-                parsed == null ? ContextDeadline.requestWithoutDeadline() : new ContextDeadline(parsed));
+        // Each request has its own disarmed flag, whether or not it has a deadline
+        return context.with(CONTEXT_DEADLINE, new ContextDeadline(parsed, new AtomicBoolean()));
     }
 
     /**
@@ -302,6 +305,7 @@ public final class Deadlines {
      */
     public static <V> V awaitWithinDeadline(Future<V> future, Enforcement clientEnforcement)
             throws ExecutionException, InterruptedException {
+        Preconditions.checkNotNull(clientEnforcement, "clientEnforcement");
         ContextDeadline contextDeadline = contextDeadline();
         if (contextDeadline == null) {
             return awaitWithinTraceDeadline(future, clientEnforcement);
@@ -324,7 +328,7 @@ public final class Deadlines {
             // the future completed after the check above, for example as the wait timed out
             return future.get();
         }
-        if (deadline.isDisarmed()) {
+        if (contextDeadline.isDisarmed()) {
             // the request was disarmed while waiting, so the deadline no longer applies
             return future.get();
         }
@@ -392,6 +396,7 @@ public final class Deadlines {
             T request,
             RequestEncodingAdapter<? super T> adapter,
             Enforcement clientEnforcement) {
+        Preconditions.checkNotNull(clientEnforcement, "clientEnforcement");
         ContextDeadline contextDeadline = contextDeadline();
         long proposedDeadlineNanos = timeoutToNanos(proposedDeadline);
         if (contextDeadline == null) {
@@ -492,9 +497,9 @@ public final class Deadlines {
         return null;
     }
 
-    // A deadline parsed from a request, with a disarmed flag of its own.
+    // A deadline parsed from a request.
     private static ProvidedDeadline newDeadline(long deadline, boolean internal, Enforcement enforcement) {
-        return new ProvidedDeadline(deadline, getClockNanoTime(), internal, enforcement, new AtomicBoolean());
+        return new ProvidedDeadline(deadline, getClockNanoTime(), internal, enforcement);
     }
 
     // The deadline in the current call context, or null if the context does not specify one.
@@ -506,8 +511,7 @@ public final class Deadlines {
     // Maps a disarmed deadline to ContextDeadline.NONE: the context still specifies a deadline, and it is none.
     @Nullable
     private static ContextDeadline armed(@Nullable ContextDeadline contextDeadline) {
-        AtomicBoolean disarmed = contextDeadline == null ? null : contextDeadline.disarmed();
-        return disarmed != null && disarmed.get() ? ContextDeadline.NONE : contextDeadline;
+        return contextDeadline != null && contextDeadline.isDisarmed() ? ContextDeadline.NONE : contextDeadline;
     }
 
     // Converts a timeout to nanoseconds, treating a negative timeout as zero. Duration.toNanos throws beyond roughly
@@ -634,12 +638,9 @@ public final class Deadlines {
         return clock.nanoTime();
     }
 
-    private record ProvidedDeadline(
-            long valueNanos,
-            long wallClockNanos,
-            boolean internal,
-            Enforcement enforcement,
-            @Nullable AtomicBoolean disarmed) {
+    // A deadline. The counterpart of com.palantir.deadlines.Deadlines.ProvidedDeadline, which holds the deadline
+    // stored for the trace; ContextDeadline.disarmed takes the place of its disablePropagation flag.
+    private record ProvidedDeadline(long valueNanos, long wallClockNanos, boolean internal, Enforcement enforcement) {
         long remainingNanos(long currentWallClockNanos) {
             long elapsed = currentWallClockNanos - this.wallClockNanos;
             return valueNanos - elapsed;
@@ -648,30 +649,18 @@ public final class Deadlines {
         boolean alreadyExpired() {
             return valueNanos <= 0;
         }
+    }
+
+    // The value stored under CONTEXT_DEADLINE: the context's deadline, or a null state if the context has no deadline.
+    // disarmed is the flag disarmRequestDeadline sets. Each request has its own, which the deadlines withDeadline
+    // binds within the request share. It is null where nothing disarms the deadline, such as outside a request or
+    // inside withoutDeadline().
+    private record ContextDeadline(
+            @Nullable ProvidedDeadline state, @Nullable AtomicBoolean disarmed) {
+        static final ContextDeadline NONE = new ContextDeadline(null, null);
 
         boolean isDisarmed() {
             return disarmed != null && disarmed.get();
-        }
-    }
-
-    // The value stored in the call context. A null state means the context has no deadline. A request without a
-    // deadline keeps its disarmed flag here, so that the deadlines withDeadline binds within the request share it.
-    private record ContextDeadline(
-            @Nullable ProvidedDeadline state, @Nullable AtomicBoolean noDeadlineDisarmed) {
-        static final ContextDeadline NONE = new ContextDeadline(null, null);
-
-        ContextDeadline(ProvidedDeadline state) {
-            this(state, null);
-        }
-
-        static ContextDeadline requestWithoutDeadline() {
-            return new ContextDeadline(null, new AtomicBoolean());
-        }
-
-        // The flag that disarms this deadline and the deadlines withDeadline binds from it, or null if there is none.
-        @Nullable
-        AtomicBoolean disarmed() {
-            return state == null ? noDeadlineDisarmed : state.disarmed();
         }
     }
 

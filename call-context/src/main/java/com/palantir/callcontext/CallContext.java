@@ -93,21 +93,6 @@ public final class CallContext {
         return new CallContext(newEntries);
     }
 
-    /** Returns a context with the same values as this one, except that it has no value for {@code key}. */
-    CallContext without(Key<?> key) {
-        int index = indexOf(key);
-        if (index < 0) {
-            return this;
-        }
-        if (entries.length == 1) {
-            return EMPTY;
-        }
-        Entry<?>[] newEntries = new Entry<?>[entries.length - 1];
-        System.arraycopy(entries, 0, newEntries, 0, index);
-        System.arraycopy(entries, index + 1, newEntries, index, entries.length - index - 1);
-        return new CallContext(newEntries);
-    }
-
     /**
      * Opens a scope that binds this context on the current thread until the scope is closed. Close the scope on this
      * thread, which restores the context that was current before; see {@link CallContextScope}. Never throws.

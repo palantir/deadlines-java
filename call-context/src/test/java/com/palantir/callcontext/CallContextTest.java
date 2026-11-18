@@ -72,19 +72,6 @@ class CallContextTest {
         }
 
         @Test
-        void without_removes_only_that_key() {
-            CallContext context = CallContext.empty().with(NAME, "a").with(COUNT, 1);
-
-            CallContext withoutName = context.without(NAME);
-
-            assertThat(withoutName.get(NAME)).isNull();
-            assertThat(withoutName.get(COUNT)).isEqualTo(1);
-            assertThat(context.get(NAME)).as("the original is unchanged").isEqualTo("a");
-            assertThat(withoutName.without(NAME)).as("removing an absent key").isSameAs(withoutName);
-            assertThat(withoutName.without(COUNT)).isSameAs(CallContext.empty());
-        }
-
-        @Test
         void keys_with_the_same_name_are_different_keys() {
             CallContext.Key<String> otherName = CallContext.Key.create("name");
 
@@ -297,7 +284,7 @@ class CallContextTest {
                 });
                 Future<CallContext> loadSees = otherPropagating.submit(() -> {
                     try (CallContextScope ignored1 =
-                            CallContext.current().without(NAME).attach()) {
+                            CallContext.current().with(NAME, "b").attach()) {
                         loadDetached.countDown();
                         backgroundChecked.await();
                         return CallContext.current();
@@ -305,11 +292,11 @@ class CallContextTest {
                 });
 
                 assertThat(backgroundSees.get())
-                        .as("background work keeps the request's context while another task drops a value")
+                        .as("background work keeps the request's context while another task changes a value")
                         .isSameAs(request);
                 backgroundChecked.countDown();
                 CallContext load = loadSees.get();
-                assertThat(load.get(NAME)).isNull();
+                assertThat(load.get(NAME)).isEqualTo("b");
                 assertThat(load.get(COUNT)).as("other values are kept").isEqualTo(1);
                 assertThat(CallContext.current())
                         .as("the request thread keeps its context")

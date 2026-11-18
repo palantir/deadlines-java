@@ -31,6 +31,7 @@ import com.palantir.deadlines.DeadlineExpiredException;
 import com.palantir.deadlines.Deadlines.Enforcement;
 import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
+import com.palantir.logsafe.exceptions.SafeNullPointerException;
 import com.palantir.logsafe.exceptions.SafeRuntimeException;
 import com.palantir.tracing.CloseableTracer;
 import com.palantir.tracing.Tracers;
@@ -860,6 +861,28 @@ class CallContextDeadlinesTest {
                 }
             }
             assertThat(future.calls).containsExactly("get()");
+        }
+    }
+
+    @Nested
+    class NullArguments {
+
+        @Test
+        @SuppressWarnings("NullAway") // exercises the null checks
+        void rejects_a_null_enforcement_even_without_a_deadline() {
+            assertThatThrownBy(() -> Deadlines.checkDeadline(null))
+                    .isInstanceOf(SafeNullPointerException.class)
+                    .hasMessage("clientEnforcement");
+            assertThatThrownBy(() -> Deadlines.awaitWithinDeadline(CompletableFuture.completedFuture("value"), null))
+                    .isInstanceOf(SafeNullPointerException.class)
+                    .hasMessage("clientEnforcement");
+            assertThatThrownBy(() -> encode(null))
+                    .isInstanceOf(SafeNullPointerException.class)
+                    .hasMessage("clientEnforcement");
+            assertThatThrownBy(() -> Deadlines.withRequestDeadline(
+                            CallContext.empty(), Optional.empty(), Map.of(), MapAdapter.INSTANCE, null))
+                    .isInstanceOf(SafeNullPointerException.class)
+                    .hasMessage("enforcementStrategy");
         }
     }
 
