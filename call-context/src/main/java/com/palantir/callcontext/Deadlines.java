@@ -75,7 +75,6 @@ public final class Deadlines {
 
     private static final Duration MAX_NANOS_DURATION = Duration.ofNanos(Long.MAX_VALUE);
 
-    @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
 
     private static final CharMatcher decimalMatcher =
