@@ -930,7 +930,6 @@ class CallContextDeadlinesTest {
         return Duration.ofNanos(Long.parseLong(call.substring("get(".length(), call.length() - "ns)".length())));
     }
 
-    @SuppressWarnings("for-rollout:deprecation")
     private static long expiredCount(String metricName) {
         return SharedTaggedMetricRegistries.getSingleton().getMetrics().entrySet().stream()
                 .filter(entry -> entry.getKey().safeName().equals(metricName))
@@ -938,7 +937,6 @@ class CallContextDeadlinesTest {
                 .sum();
     }
 
-    @SuppressWarnings("for-rollout:deprecation")
     private static Meter expiredMeter(Expired_Cause cause) {
         return DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton())
                 .expired()
