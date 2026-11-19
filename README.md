@@ -74,6 +74,42 @@ Deadlines are most beneficial for request chains with multiple downstream servic
 - **Fire & forget workflows**: If your service initiates asynchronous work or makes end-of-request calls which are expected to succeed even after the client has stopped waiting, these operations may fail if a deadline expires and enforcement prevents outbound RPC calls. To allow these operations to complete, either call `Deadlines.disableFurtherDeadlinePropagation()` before initiating (which stops deadline headers from being added to subsequent requests), or configure specific clients with `Enforcement.DISABLE`.
 - **Non-preemptive**: Deadline expiration does not terminate in-flight work. It only prevents new outbound requests, providing backpressure while allowing ongoing work to finish gracefully.
 
+## Call Context
+
+`com.palantir.callcontext:call-context` provides immutable request-scoped values that are bound to threads and handed
+off explicitly.
+
+A `CallContext` is an immutable set of request-scoped values. Every thread has exactly one current context, which
+changes only when a `CallContextScope` is opened or closed on that thread. Work handed to another thread carries a
+context only if the hand-off is wrapped, for example with `CallContext.current().wrap(task)` or
+`CallContext.propagating(executor)`. Tracing does not carry contexts.
+
+The context currently stores the deadline of the current request, read and written through
+[`com.palantir.callcontext.Deadlines`](call-context/src/main/java/com/palantir/callcontext/Deadlines.java). It uses the
+same `Expect-Within` headers as `com.palantir.deadlines.Deadlines`.
+
+```groovy
+dependencies {
+    implementation 'com.palantir.callcontext:call-context:<version>'
+}
+```
+
+Bind the deadline of an inbound request for the duration of the request, shorten it for a block of code, and hand the
+context off to other threads:
+
+```java
+ExecutorService executor = CallContext.propagating(Executors.newCachedThreadPool());
+
+CallContext context = Deadlines.withRequestDeadline(
+        CallContext.empty(), Optional.empty(), request, adapter, Enforcement.DEFER);
+try (CallContextScope requestScope = context.attach()) {
+    try (CallContextScope scope = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+        // The task runs with the current context, including the 5 second deadline.
+        executor.submit(task);
+    }
+}
+```
+
 ## License
 
 This project is made available under the [Apache 2.0 License](LICENSE).
