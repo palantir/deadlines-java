@@ -49,3 +49,22 @@ namespaces:
               - value: above-100s
                 docs: Original deadline budget was 100 seconds or more.
         docs: Marked every time a deadline expiration is reached
+      divergence:
+        type: meter
+        tags:
+          - name: kind
+            values:
+              - value: context-only
+                docs: The call context holds the request's deadline, but no deadline is stored for the trace, for
+                      example because the code started a new trace, or disabled the trace's deadline propagation.
+                      Reading the call context instead of the trace adds a deadline here.
+              - value: trace-only
+                docs: The request in the call context has no deadline, but a deadline is stored for the trace.
+                      Reading the call context instead of the trace removes the deadline here.
+              - value: different
+                docs: Both have a deadline, but their remaining times are more than 100 ms apart, for example because a
+                      span from another request is attached. Reading the call context instead of the trace changes the
+                      deadline here.
+        docs: Marked on each read of a request's deadline in the call context where the trace disagrees on the deadline.
+              Used while both hold deadlines, to find code whose deadline changes when reads use the call context
+              instead of the trace.

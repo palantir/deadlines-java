@@ -14,10 +14,10 @@ dependencies {
     implementation 'com.palantir.safe-logging:logger'
     implementation 'com.palantir.safe-logging:preconditions'
     implementation 'com.palantir.safe-logging:safe-logging'
+    implementation 'com.palantir.tracing:tracing'
     implementation 'com.palantir.tritium:tritium-registry'
     implementation 'io.dropwizard.metrics:metrics-core'
 
-    testImplementation 'com.palantir.tracing:tracing'
     testImplementation 'org.assertj:assertj-core'
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.quicktheories:quicktheories'
