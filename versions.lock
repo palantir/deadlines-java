@@ -12,15 +12,15 @@ com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava (1 c
 
 com.google.j2objc:j2objc-annotations:3.1 (1 constraints: b809f1a0)
 
-com.palantir.safe-logging:logger:3.21.0 (4 constraints: 3131c617)
+com.palantir.safe-logging:logger:3.22.0 (4 constraints: 32314818)
 
-com.palantir.safe-logging:logger-slf4j:3.21.0 (1 constraints: 310e8e50)
+com.palantir.safe-logging:logger-slf4j:3.22.0 (1 constraints: 320e9150)
 
-com.palantir.safe-logging:logger-spi:3.21.0 (2 constraints: 711e42b0)
+com.palantir.safe-logging:logger-spi:3.22.0 (2 constraints: 731e78b0)
 
-com.palantir.safe-logging:preconditions:3.21.0 (5 constraints: f04166d6)
+com.palantir.safe-logging:preconditions:3.22.0 (5 constraints: f14117d7)
 
-com.palantir.safe-logging:safe-logging:3.21.0 (8 constraints: fa708795)
+com.palantir.safe-logging:safe-logging:3.22.0 (8 constraints: fe706499)
 
 com.palantir.tracing:tracing:6.43.0 (1 constraints: 3f055c3b)
 
