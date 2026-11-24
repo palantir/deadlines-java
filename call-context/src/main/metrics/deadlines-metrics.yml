@@ -55,16 +55,11 @@ namespaces:
           - name: kind
             values:
               - value: context-only
-                docs: The call context holds the request's deadline, but no deadline is stored for the trace, for
-                      example because the code started a new trace, or disabled the trace's deadline propagation.
-                      Reading the call context instead of the trace adds a deadline here.
+                docs: The call context has a deadline and the trace doesn't, for example because the code started a
+                      new trace.
               - value: trace-only
-                docs: The request in the call context has no deadline, but a deadline is stored for the trace.
-                      Reading the call context instead of the trace removes the deadline here.
+                docs: The trace has a deadline and the call context doesn't.
               - value: different
-                docs: Both have a deadline, but their remaining times are more than 100 ms apart, for example because a
-                      span from another request is attached. Reading the call context instead of the trace changes the
-                      deadline here.
-        docs: Marked on each read of a request's deadline in the call context where the trace disagrees on the deadline.
-              Used while both hold deadlines, to find code whose deadline changes when reads use the call context
-              instead of the trace.
+                docs: Both have a deadline, but their remaining times differ by more than 100 ms.
+        docs: Marked when the call context and the trace disagree on a request's deadline. Each mark is a read whose
+              deadline changes once deadlines are read from the call context instead of the trace.

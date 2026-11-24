@@ -70,8 +70,10 @@ import javax.annotation.Nullable;
  * context (one bound by {@link #withRequestDeadline} or {@link #withShadowRequestDeadline}, until it is disarmed)
  * checks whether the trace agrees: that both have a deadline, or neither does, and that their remaining times are
  * within 100 ms of each other. Where they don't, for example because the code started a new trace, the read marks the
- * {@code callcontext.deadline.divergence} meter and logs, at most once a second, the stack trace and the trace ID of the
- * request. Deadlines bound by {@link #withDeadline} and {@link #withoutDeadline()} are not checked.
+ * {@code callcontext.deadline.divergence} meter and logs, at most once a second, the stack trace and the trace ID of
+ * the request. Deadlines bound by {@link #withDeadline} and {@link #withoutDeadline()} are not checked, and neither are
+ * requests whose deadline the trace didn't hold when they were parsed, such as requests from servers that no longer
+ * write trace state. So store the trace's deadline before parsing the request.
  */
 public final class Deadlines {
 
@@ -300,7 +302,10 @@ public final class Deadlines {
             boolean shadow) {
         Preconditions.checkNotNull(enforcementStrategy, "enforcementStrategy");
         ProvidedDeadline parsed = parseState(internalDeadline, request, adapter, enforcementStrategy);
-        RequestOrigin origin = new RequestOrigin(shadow, Tracer.hasTraceId() ? Tracer.getTraceId() : null);
+        // Once servers stop storing the request's deadline for the trace, every read would count as context-only
+        boolean checked =
+                parsed == null || TraceDeadlines.getRemainingDeadline().isPresent();
+        RequestOrigin origin = new RequestOrigin(shadow, checked, Tracer.hasTraceId() ? Tracer.getTraceId() : null);
         // Each request has its own disarmed flag, whether or not it has a deadline
         return context.with(CONTEXT_DEADLINE, new ContextDeadline(parsed, new AtomicBoolean(), origin));
     }
@@ -558,7 +563,7 @@ public final class Deadlines {
         }
         RequestOrigin origin = contextDeadline.origin();
         if (origin != null) {
-            if (!contextDeadline.isDisarmed()) {
+            if (origin.checked() && !contextDeadline.isDisarmed()) {
                 checkAgainstTrace(contextDeadline.state(), origin);
             }
             if (origin.shadow()) {
@@ -764,8 +769,10 @@ public final class Deadlines {
     }
 
     // The request a context's deadline was parsed from. In shadow mode, the deadline is only checked against the
-    // trace's, and otherwise ignored. traceId is the request's trace, for the log of a read in another trace.
-    private record RequestOrigin(boolean shadow, @Nullable String traceId) {}
+    // trace's, and otherwise ignored. checked is false if the trace didn't hold the request's deadline when it was
+    // parsed. traceId is the request's trace, for the log of a read in another trace.
+    private record RequestOrigin(
+            boolean shadow, boolean checked, @Nullable String traceId) {}
 
     interface Clock {
         long nanoTime();
