@@ -12,27 +12,27 @@ com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava (1 c
 
 com.google.j2objc:j2objc-annotations:3.1 (1 constraints: b809f1a0)
 
-com.palantir.safe-logging:logger:3.22.0 (4 constraints: 32314818)
+com.palantir.safe-logging:logger:3.22.0 (4 constraints: 34317c18)
 
 com.palantir.safe-logging:logger-slf4j:3.22.0 (1 constraints: 320e9150)
 
 com.palantir.safe-logging:logger-spi:3.22.0 (2 constraints: 731e78b0)
 
-com.palantir.safe-logging:preconditions:3.22.0 (5 constraints: f14117d7)
+com.palantir.safe-logging:preconditions:3.22.0 (5 constraints: f441acd7)
 
-com.palantir.safe-logging:safe-logging:3.22.0 (8 constraints: fe706499)
+com.palantir.safe-logging:safe-logging:3.22.0 (8 constraints: 0171f999)
 
 com.palantir.tracing:tracing:6.43.0 (1 constraints: 3f055c3b)
 
 com.palantir.tracing:tracing-api:6.43.0 (1 constraints: d50c2c16)
 
-com.palantir.tritium:tritium-api:0.144.0 (2 constraints: 931f52f4)
+com.palantir.tritium:tritium-api:0.145.0 (2 constraints: 951f87f4)
 
-com.palantir.tritium:tritium-core:0.144.0 (1 constraints: 7110b3b2)
+com.palantir.tritium:tritium-core:0.145.0 (1 constraints: 7210b6b2)
 
-com.palantir.tritium:tritium-metrics:0.144.0 (1 constraints: 6b05a440)
+com.palantir.tritium:tritium-metrics:0.145.0 (1 constraints: 6c05a740)
 
-com.palantir.tritium:tritium-registry:0.144.0 (2 constraints: 6f18bab7)
+com.palantir.tritium:tritium-registry:0.145.0 (2 constraints: 7118f0b7)
 
 io.dropwizard.metrics:metrics-core:4.2.40 (3 constraints: 40269d76)
 
