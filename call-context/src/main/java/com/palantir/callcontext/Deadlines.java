@@ -21,6 +21,7 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.util.concurrent.RateLimiter;
 import com.google.errorprone.annotations.MustBeClosed;
+import com.palantir.callcontext.DeadlineMetrics.Divergence_Kind;
 import com.palantir.callcontext.DeadlineMetrics.Expired_Cause;
 import com.palantir.callcontext.DeadlineMetrics.Expired_Intent;
 import com.palantir.deadlines.DeadlineExpiredException;
@@ -29,9 +30,12 @@ import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.deadlines.DeadlinesHttpHeaders;
 import com.palantir.logsafe.Preconditions;
+import com.palantir.logsafe.SafeArg;
 import com.palantir.logsafe.UnsafeArg;
+import com.palantir.logsafe.exceptions.SafeRuntimeException;
 import com.palantir.logsafe.logger.SafeLogger;
 import com.palantir.logsafe.logger.SafeLoggerFactory;
+import com.palantir.tracing.Tracer;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
 import java.util.Optional;
@@ -61,11 +65,21 @@ import javax.annotation.Nullable;
  * <p>
  * {@link Enforcement}, the request adapters, the headers and {@link DeadlineExpiredException} are those of
  * {@link com.palantir.deadlines.Deadlines}, so callers handle a deadline the same way whichever stores it.
+ * <p>
+ * During the migration, servers store a request's deadline in both places. Each read of a request's deadline in the
+ * context (one bound by {@link #withRequestDeadline} or {@link #withShadowRequestDeadline}, until it is disarmed)
+ * checks whether the trace agrees: that both have a deadline, or neither does, and that their remaining times are
+ * within 100 ms of each other. Where they don't, for example because the code started a new trace, the read marks the
+ * {@code callcontext.deadline.divergence} meter and logs, at most once a second, the stack trace and the trace ID of
+ * the request. Deadlines bound by {@link #withDeadline} and {@link #withoutDeadline()} are not checked, and neither are
+ * requests whose deadline the trace didn't hold when they were parsed, such as requests from servers that no longer
+ * write trace state. So store the trace's deadline before parsing the request.
  */
 public final class Deadlines {
 
     private static final SafeLogger log = SafeLoggerFactory.get(Deadlines.class);
     private static final RateLimiter logLimiter = RateLimiter.create(1.0);
+    private static final RateLimiter divergenceLogLimiter = RateLimiter.create(1.0);
 
     private Deadlines() {}
 
@@ -74,6 +88,11 @@ public final class Deadlines {
     private static final CallContext.Key<ContextDeadline> CONTEXT_DEADLINE = CallContext.Key.create("deadline");
 
     private static final Duration MAX_NANOS_DURATION = Duration.ofNanos(Long.MAX_VALUE);
+
+    // How far apart the remaining times of the context's and the trace's deadlines may be before a read counts as
+    // divergent. A server parses both from the same request a few microseconds apart.
+    private static final long DIVERGENCE_TOLERANCE_NANOS =
+            Duration.ofMillis(100).toNanos();
 
     @SuppressWarnings("for-rollout:deprecation")
     private static final DeadlineMetrics metrics = DeadlineMetrics.of(SharedTaggedMetricRegistries.getSingleton());
@@ -204,7 +223,7 @@ public final class Deadlines {
             disarmed = contextDeadline.disarmed();
         }
         ProvidedDeadline bound = new ProvidedDeadline(timeoutNanos, now, true, enforcement);
-        return context.with(CONTEXT_DEADLINE, new ContextDeadline(bound, disarmed))
+        return context.with(CONTEXT_DEADLINE, new ContextDeadline(bound, disarmed, null))
                 .attach();
     }
 
@@ -252,10 +271,43 @@ public final class Deadlines {
             T request,
             RequestDecodingAdapter<? super T> adapter,
             Enforcement enforcementStrategy) {
+        return requestDeadline(context, internalDeadline, request, adapter, enforcementStrategy, false);
+    }
+
+    /**
+     * Returns {@code context} with the deadline of an inbound request in shadow mode, for the migration from the
+     * deadline that {@link com.palantir.deadlines.Deadlines} stores for the trace. Bind the result for the duration of
+     * the request with {@link CallContext#attach()}.
+     * <p>
+     * Code running with the result behaves exactly as if {@code context} had no deadline, so the deadline stored for
+     * the trace applies. Each read still checks the request's deadline against the trace's (see the class
+     * documentation), which shows where {@link #withRequestDeadline} would change the deadline before it does. The
+     * deadline is parsed and disarmed as by {@link #withRequestDeadline}.
+     */
+    public static <T> CallContext withShadowRequestDeadline(
+            CallContext context,
+            Optional<Duration> internalDeadline,
+            T request,
+            RequestDecodingAdapter<? super T> adapter,
+            Enforcement enforcementStrategy) {
+        return requestDeadline(context, internalDeadline, request, adapter, enforcementStrategy, true);
+    }
+
+    private static <T> CallContext requestDeadline(
+            CallContext context,
+            Optional<Duration> internalDeadline,
+            T request,
+            RequestDecodingAdapter<? super T> adapter,
+            Enforcement enforcementStrategy,
+            boolean shadow) {
         Preconditions.checkNotNull(enforcementStrategy, "enforcementStrategy");
         ProvidedDeadline parsed = parseState(internalDeadline, request, adapter, enforcementStrategy);
+        // Once servers stop storing the request's deadline for the trace, every read would count as context-only
+        boolean checked =
+                parsed == null || TraceDeadlines.getRemainingDeadline().isPresent();
+        RequestOrigin origin = new RequestOrigin(shadow, checked, Tracer.hasTraceId() ? Tracer.getTraceId() : null);
         // Each request has its own disarmed flag, whether or not it has a deadline
-        return context.with(CONTEXT_DEADLINE, new ContextDeadline(parsed, new AtomicBoolean()));
+        return context.with(CONTEXT_DEADLINE, new ContextDeadline(parsed, new AtomicBoolean(), origin));
     }
 
     /**
@@ -505,7 +557,56 @@ public final class Deadlines {
     // The deadline in the current call context, or null if the context does not specify one.
     @Nullable
     private static ContextDeadline contextDeadline() {
-        return armed(CallContext.current().get(CONTEXT_DEADLINE));
+        ContextDeadline contextDeadline = CallContext.current().get(CONTEXT_DEADLINE);
+        if (contextDeadline == null) {
+            return null;
+        }
+        RequestOrigin origin = contextDeadline.origin();
+        if (origin != null) {
+            if (origin.checked() && !contextDeadline.isDisarmed()) {
+                checkAgainstTrace(contextDeadline.state(), origin);
+            }
+            if (origin.shadow()) {
+                return null;
+            }
+        }
+        return armed(contextDeadline);
+    }
+
+    // Records a read where the request's deadline in the context and the deadline stored for the trace disagree, so
+    // the read changes once the context's deadline applies instead of the trace's.
+    private static void checkAgainstTrace(@Nullable ProvidedDeadline contextState, RequestOrigin origin) {
+        Optional<Duration> traceRemaining = TraceDeadlines.getRemainingDeadline();
+        Duration contextRemaining = null;
+        Divergence_Kind kind;
+        if (contextState == null) {
+            if (traceRemaining.isEmpty()) {
+                return;
+            }
+            kind = Divergence_Kind.TRACE_ONLY;
+        } else {
+            // Like the trace's, an expired deadline has zero time remaining, however long ago it expired
+            long contextRemainingNanos = Math.max(0, contextState.remainingNanos(getClockNanoTime()));
+            if (traceRemaining.isEmpty()) {
+                kind = Divergence_Kind.CONTEXT_ONLY;
+            } else if (Math.abs(contextRemainingNanos - traceRemaining.get().toNanos()) > DIVERGENCE_TOLERANCE_NANOS) {
+                kind = Divergence_Kind.DIFFERENT;
+            } else {
+                return;
+            }
+            contextRemaining = Duration.ofNanos(contextRemainingNanos);
+        }
+        metrics.divergence(kind).mark();
+        if (divergenceLogLimiter.tryAcquire()) {
+            log.info(
+                    "The call context and the trace disagree on the request's deadline",
+                    SafeArg.of("kind", kind),
+                    SafeArg.of("contextRemaining", contextRemaining),
+                    SafeArg.of("traceRemaining", traceRemaining.orElse(null)),
+                    SafeArg.of("shadow", origin.shadow()),
+                    SafeArg.of("requestTraceId", origin.traceId()),
+                    new SafeRuntimeException("Divergent deadline read"));
+        }
     }
 
     // Maps a disarmed deadline to ContextDeadline.NONE: the context still specifies a deadline, and it is none.
@@ -654,15 +755,24 @@ public final class Deadlines {
     // The value stored under CONTEXT_DEADLINE: the context's deadline, or a null state if the context has no deadline.
     // disarmed is the flag disarmRequestDeadline sets. Each request has its own, which the deadlines withDeadline
     // binds within the request share. It is null where nothing disarms the deadline, such as outside a request or
-    // inside withoutDeadline().
+    // inside withoutDeadline(). origin is set only on the deadline parsed from a request, which reads check against
+    // the trace's deadline.
     private record ContextDeadline(
-            @Nullable ProvidedDeadline state, @Nullable AtomicBoolean disarmed) {
-        static final ContextDeadline NONE = new ContextDeadline(null, null);
+            @Nullable ProvidedDeadline state,
+            @Nullable AtomicBoolean disarmed,
+            @Nullable RequestOrigin origin) {
+        static final ContextDeadline NONE = new ContextDeadline(null, null, null);
 
         boolean isDisarmed() {
             return disarmed != null && disarmed.get();
         }
     }
+
+    // The request a context's deadline was parsed from. In shadow mode, the deadline is only checked against the
+    // trace's, and otherwise ignored. checked is false if the trace didn't hold the request's deadline when it was
+    // parsed. traceId is the request's trace, for the log of a read in another trace.
+    private record RequestOrigin(
+            boolean shadow, boolean checked, @Nullable String traceId) {}
 
     interface Clock {
         long nanoTime();

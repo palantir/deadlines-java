@@ -33,7 +33,9 @@ import com.palantir.deadlines.Deadlines.RequestDecodingAdapter;
 import com.palantir.deadlines.Deadlines.RequestEncodingAdapter;
 import com.palantir.logsafe.exceptions.SafeNullPointerException;
 import com.palantir.logsafe.exceptions.SafeRuntimeException;
+import com.palantir.tracing.CloseableSpan;
 import com.palantir.tracing.CloseableTracer;
+import com.palantir.tracing.DetachedSpan;
 import com.palantir.tracing.Tracers;
 import com.palantir.tritium.metrics.registry.SharedTaggedMetricRegistries;
 import java.time.Duration;
@@ -865,6 +867,313 @@ class CallContextDeadlinesTest {
     }
 
     @Nested
+    class ShadowRequestDeadlines {
+
+        @Test
+        void reads_use_the_trace_deadline() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 =
+                        request(Duration.ofSeconds(9), Enforcement.DEFER, true).attach()) {
+                    assertThat(Deadlines.getRemainingDeadline()).hasValueSatisfying(FIVE_SECOND_TRACE_DEADLINE);
+                    assertThat(Deadlines.getEnforcement()).contains(Enforcement.ENFORCE);
+                    assertThat(encode(Enforcement.DEFER)).containsEntry(EXPECT_WITHIN_ENFORCED, "true");
+                }
+            }
+        }
+
+        @Test
+        void reads_have_no_deadline_when_the_trace_has_none() throws Exception {
+            CallContext request = request(Duration.ofSeconds(1), Enforcement.ENFORCE, true);
+            clock.advance(Duration.ofSeconds(2));
+
+            try (CallContextScope ignored = request.attach()) {
+                assertThat(Deadlines.getRemainingDeadline()).isEmpty();
+                assertThat(Deadlines.getEnforcement()).isEmpty();
+                assertThatCode(() -> Deadlines.checkDeadline(Enforcement.ENFORCE))
+                        .doesNotThrowAnyException();
+                assertThat(Deadlines.awaitWithinDeadline(RecordingFuture.pending(), Enforcement.ENFORCE))
+                        .isEqualTo("value");
+                assertThat(encode(Enforcement.DEFER)).containsOnly(entry(EXPECT_WITHIN, "300.000"));
+            }
+        }
+
+        @Test
+        void with_deadline_ignores_the_request_deadline() {
+            try (CallContextScope ignored = request(Duration.ofSeconds(1), Enforcement.ENFORCE, true)
+                            .attach();
+                    CallContextScope ignored1 = Deadlines.withDeadline(Duration.ofSeconds(5))) {
+                assertThat(Deadlines.getRemainingDeadline())
+                        .as("as without a context, the scope binds its own deadline")
+                        .contains(Duration.ofSeconds(5));
+            }
+        }
+
+        @Test
+        void a_disarmed_request_still_reads_the_trace_deadline() {
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                CallContext request = request(Duration.ofSeconds(9), Enforcement.ENFORCE, true);
+
+                Deadlines.disarmRequestDeadline(request);
+
+                try (CallContextScope ignored1 = request.attach()) {
+                    assertThat(Deadlines.getRemainingDeadline()).hasValueSatisfying(FIVE_SECOND_TRACE_DEADLINE);
+                }
+            }
+        }
+    }
+
+    @Nested
+    class Divergence {
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void does_not_mark_when_the_trace_holds_the_request_deadline(boolean shadow) {
+            long contextOnlyBefore = divergenceCount("context-only");
+            long traceOnlyBefore = divergenceCount("trace-only");
+            long differentBefore = divergenceCount("different");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                        .attach()) {
+                    Deadlines.getRemainingDeadline();
+                    encode(Enforcement.DEFER);
+                }
+            }
+            try (CallContextScope ignored = requestWithoutDeadline(shadow).attach()) {
+                Deadlines.getRemainingDeadline();
+            }
+
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore);
+            assertThat(divergenceCount("trace-only")).isEqualTo(traceOnlyBefore);
+            assertThat(divergenceCount("different")).isEqualTo(differentBefore);
+        }
+
+        @Test
+        void marks_another_requests_span_which_reads_its_deadline_in_shadow_mode() {
+            assertThat(readWithAnotherRequestsSpan(true))
+                    .as("as today, the trace's deadline is the other request's")
+                    .hasValueSatisfying(
+                            remaining -> assertThat(remaining).isBetween(Duration.ofSeconds(1), Duration.ofSeconds(2)));
+        }
+
+        @Test
+        void marks_another_requests_span_which_keeps_the_request_deadline() {
+            assertThat(readWithAnotherRequestsSpan(false))
+                    .as("the context still holds this request's deadline")
+                    .contains(Duration.ofSeconds(9));
+        }
+
+        // Reads the deadline while a span from another request, with a 2s deadline, is attached during a request with
+        // a 9s deadline, as a worker that batches requests might, and checks that the read is marked
+        private Optional<Duration> readWithAnotherRequestsSpan(boolean shadow) {
+            long differentBefore = divergenceCount("different");
+            DetachedSpan otherRequest;
+            try (CloseableTracer ignored = CloseableTracer.startSpan("other request")) {
+                setTraceDeadline(Duration.ofSeconds(2), Enforcement.ENFORCE);
+                otherRequest = DetachedSpan.start("other request's work");
+            }
+            Optional<Duration> remaining;
+            try (CloseableTracer ignored = CloseableTracer.startSpan("request")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                                .attach();
+                        CloseableSpan ignored2 = otherRequest.attach()) {
+                    remaining = Deadlines.getRemainingDeadline();
+                }
+            } finally {
+                otherRequest.complete();
+            }
+            assertThat(divergenceCount("different")).isEqualTo(differentBefore + 1);
+            return remaining;
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void does_not_mark_deadlines_that_have_both_expired(boolean shadow) {
+            long differentBefore = divergenceCount("different");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ZERO, Enforcement.DEFER);
+                CallContext request = request(Duration.ZERO, Enforcement.DEFER, shadow);
+                clock.advance(Duration.ofSeconds(5));
+
+                try (CallContextScope ignored1 = request.attach()) {
+                    Deadlines.getRemainingDeadline();
+                }
+            }
+
+            assertThat(divergenceCount("different"))
+                    .as("both have no time left, however long ago they expired")
+                    .isEqualTo(differentBefore);
+        }
+
+        @Test
+        void marks_a_new_trace_which_drops_the_deadline_in_shadow_mode() {
+            assertThat(readInNewTrace(true))
+                    .as("as today, the new trace has no deadline")
+                    .isEmpty();
+        }
+
+        @Test
+        void marks_a_new_trace_which_keeps_the_request_deadline() {
+            assertThat(readInNewTrace(false))
+                    .as("the context still holds the request's deadline")
+                    .contains(Duration.ofSeconds(9));
+        }
+
+        // Reads the deadline in a new trace started during a request, and checks that the read is marked
+        private Optional<Duration> readInNewTrace(boolean shadow) {
+            long contextOnlyBefore = divergenceCount("context-only");
+            AtomicReference<Optional<Duration>> inNewTrace = new AtomicReference<>();
+            try (CloseableTracer ignored = CloseableTracer.startSpan("request")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                        .attach()) {
+                    Tracers.wrapWithNewTrace("background", () -> inNewTrace.set(Deadlines.getRemainingDeadline()))
+                            .run();
+                }
+            }
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore + 1);
+            return inNewTrace.get();
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void marks_a_hand_off_that_carries_the_context_but_not_the_trace(boolean shadow) throws Exception {
+            long contextOnlyBefore = divergenceCount("context-only");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                        .attach()) {
+                    CallContext.propagating(executor)
+                            .submit(Deadlines::getRemainingDeadline)
+                            .get();
+                }
+            }
+
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore + 1);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void marks_disabled_trace_propagation(boolean shadow) {
+            long contextOnlyBefore = divergenceCount("context-only");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                        .attach()) {
+                    com.palantir.deadlines.Deadlines.disableFurtherDeadlinePropagation();
+                    Deadlines.getRemainingDeadline();
+                }
+            }
+
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore + 1);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void marks_a_request_without_a_deadline_in_a_trace_with_one(boolean shadow) {
+            long traceOnlyBefore = divergenceCount("trace-only");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+
+                try (CallContextScope ignored1 = requestWithoutDeadline(shadow).attach()) {
+                    Deadlines.getRemainingDeadline();
+                }
+            }
+
+            assertThat(divergenceCount("trace-only")).isEqualTo(traceOnlyBefore + 1);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void does_not_mark_a_disarmed_request(boolean shadow) {
+            long contextOnlyBefore = divergenceCount("context-only");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(9), Enforcement.ENFORCE);
+                CallContext request = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow);
+
+                // As when the response commits
+                com.palantir.deadlines.Deadlines.disableFurtherDeadlinePropagation();
+                Deadlines.disarmRequestDeadline(request);
+                try (CallContextScope ignored1 = request.attach()) {
+                    Deadlines.getRemainingDeadline();
+                }
+            }
+
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void does_not_check_a_request_whose_deadline_was_not_stored_for_the_trace(boolean shadow) {
+            long contextOnlyBefore = divergenceCount("context-only");
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test");
+                    CallContextScope ignored1 = request(Duration.ofSeconds(9), Enforcement.ENFORCE, shadow)
+                            .attach()) {
+                Deadlines.getRemainingDeadline();
+                encode(Enforcement.DEFER);
+            }
+
+            assertThat(divergenceCount("context-only"))
+                    .as("the server doesn't write trace state, so the reads aren't compared with it")
+                    .isEqualTo(contextOnlyBefore);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void marks_another_requests_span_in_a_request_without_a_deadline(boolean shadow) {
+            long traceOnlyBefore = divergenceCount("trace-only");
+            DetachedSpan otherRequest;
+            try (CloseableTracer ignored = CloseableTracer.startSpan("other request")) {
+                setTraceDeadline(Duration.ofSeconds(2), Enforcement.ENFORCE);
+                otherRequest = DetachedSpan.start("other request's work");
+            }
+            try (CloseableTracer ignored = CloseableTracer.startSpan("request");
+                    CallContextScope ignored1 = requestWithoutDeadline(shadow).attach();
+                    CloseableSpan ignored2 = otherRequest.attach()) {
+                Deadlines.getRemainingDeadline();
+            } finally {
+                otherRequest.complete();
+            }
+
+            assertThat(divergenceCount("trace-only"))
+                    .as("neither had a deadline when the request was parsed, so the request is still checked")
+                    .isEqualTo(traceOnlyBefore + 1);
+        }
+
+        @Test
+        void does_not_mark_deadlines_bound_by_scopes() {
+            long contextOnlyBefore = divergenceCount("context-only");
+            long traceOnlyBefore = divergenceCount("trace-only");
+
+            try (CallContextScope ignored = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                Deadlines.getRemainingDeadline();
+            }
+            try (CallContextScope ignored = requestWithoutDeadline(false).attach();
+                    CallContextScope ignored1 = Deadlines.withDeadline(Duration.ofSeconds(1))) {
+                Deadlines.getRemainingDeadline();
+            }
+            try (CloseableTracer ignored = CloseableTracer.startSpan("test")) {
+                setTraceDeadline(Duration.ofSeconds(5), Enforcement.ENFORCE);
+                try (CallContextScope ignored1 = Deadlines.withoutDeadline()) {
+                    Deadlines.getRemainingDeadline();
+                }
+            }
+
+            assertThat(divergenceCount("context-only")).isEqualTo(contextOnlyBefore);
+            assertThat(divergenceCount("trace-only")).isEqualTo(traceOnlyBefore);
+        }
+    }
+
+    @Nested
     class NullArguments {
 
         @Test
@@ -908,6 +1217,24 @@ class CallContextDeadlinesTest {
                 CallContext.empty(), Optional.empty(), Map.of(), MapAdapter.INSTANCE, Enforcement.ENFORCE);
     }
 
+    // A context for an inbound request without a deadline, in shadow mode or not.
+    private static CallContext requestWithoutDeadline(boolean shadow) {
+        return shadow
+                ? Deadlines.withShadowRequestDeadline(
+                        CallContext.empty(), Optional.empty(), Map.of(), MapAdapter.INSTANCE, Enforcement.ENFORCE)
+                : requestWithoutDeadline();
+    }
+
+    // A context with an external deadline parsed from an inbound request, in shadow mode or not.
+    private static CallContext request(Duration deadline, Enforcement enforcement, boolean shadow) {
+        Map<String, String> headers = Map.of(EXPECT_WITHIN, Deadlines.durationToHeaderValue(deadline.toNanos()));
+        return shadow
+                ? Deadlines.withShadowRequestDeadline(
+                        CallContext.empty(), Optional.empty(), headers, MapAdapter.INSTANCE, enforcement)
+                : Deadlines.withRequestDeadline(
+                        CallContext.empty(), Optional.empty(), headers, MapAdapter.INSTANCE, enforcement);
+    }
+
     // Stores an internal deadline for the current trace, as deadlines-java does for a request.
     private static void setTraceDeadline(Duration deadline, Enforcement enforcement) {
         com.palantir.deadlines.Deadlines.parseFromRequest(
@@ -934,6 +1261,15 @@ class CallContextDeadlinesTest {
     private static long expiredCount(String metricName) {
         return SharedTaggedMetricRegistries.getSingleton().getMetrics().entrySet().stream()
                 .filter(entry -> entry.getKey().safeName().equals(metricName))
+                .mapToLong(entry -> ((Meter) entry.getValue()).getCount())
+                .sum();
+    }
+
+    @SuppressWarnings("for-rollout:deprecation")
+    private static long divergenceCount(String kind) {
+        return SharedTaggedMetricRegistries.getSingleton().getMetrics().entrySet().stream()
+                .filter(entry -> entry.getKey().safeName().equals("callcontext.deadline.divergence")
+                        && kind.equals(entry.getKey().safeTags().get("kind")))
                 .mapToLong(entry -> ((Meter) entry.getValue()).getCount())
                 .sum();
     }
